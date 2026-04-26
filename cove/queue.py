@@ -1,0 +1,537 @@
+"""Queue manager: tracks download tasks, enforces a concurrency cap, and
+mediates between the UI and the aria2 RPC client.
+
+State machine per task:
+    queued -> active -> (paused -> active)* -> (completed | error | removed)
+
+The QueueManager itself runs entirely on the Qt main thread. RPC calls
+fan out to background QThreadPool workers; results come back via signals.
+"""
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Optional
+
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
+
+from . import db
+from .aria2 import Aria2Error, Aria2RPC
+from .config import Settings
+
+URL_RE = re.compile(r"https?://\S+|ftp://\S+|magnet:\?\S+")
+
+
+@dataclass
+class DownloadTask:
+    id: int
+    url: str
+    out_dir: str
+    connections: int = 16
+    speed_limit_kbps: int = 0
+    filename: Optional[str] = None
+    gid: Optional[str] = None
+    status: str = "queued"  # queued | active | paused | completed | error | removed
+    total_bytes: int = 0
+    completed_bytes: int = 0
+    download_speed: int = 0
+    error: Optional[str] = None
+    created_at: float = field(default_factory=time.time)
+    finished_at: Optional[float] = None
+    last_status_at: float = 0.0  # wall-clock when completed_bytes/speed last updated
+
+    @property
+    def progress(self) -> float:
+        completed = self.interpolated_completed_bytes()
+        return (completed / self.total_bytes) if self.total_bytes else 0.0
+
+    def interpolated_completed_bytes(self) -> int:
+        """Predicted byte count between aria2 polls.
+
+        We poll aria2 a few times a second, but the UI repaints at ~30 fps;
+        between samples we extrapolate `completed_bytes + speed * elapsed`
+        so the progress bar moves smoothly instead of stepping.
+        """
+        if self.status != "active" or self.last_status_at <= 0 or self.download_speed <= 0:
+            return self.completed_bytes
+        elapsed = time.time() - self.last_status_at
+        if elapsed <= 0:
+            return self.completed_bytes
+        predicted = self.completed_bytes + int(self.download_speed * elapsed)
+        if self.total_bytes > 0:
+            predicted = min(predicted, self.total_bytes)
+        return predicted
+
+
+class _RpcCall(QRunnable):
+    """Run a single RPC call off the UI thread.
+
+    autoDelete is disabled — the QueueManager pins the runnable until its
+    signal lands so the QObject carrying `done`/`failed` outlives any
+    queued cross-thread metacall. (Letting the pool reap a runnable whose
+    Python `signals` attribute the C++ side still references segfaults.)
+    """
+
+    class _Sig(QObject):
+        done = Signal(object)
+        failed = Signal(str)
+        finished = Signal()
+
+    def __init__(self, fn, *args, **kwargs):
+        super().__init__()
+        self.setAutoDelete(False)
+        self.signals = self._Sig()
+        self._fn = fn
+        self._args = args
+        self._kwargs = kwargs
+
+    def run(self):
+        try:
+            result = self._fn(*self._args, **self._kwargs)
+        except Aria2Error as e:
+            self.signals.failed.emit(str(e))
+        except Exception as e:  # pragma: no cover - defensive
+            self.signals.failed.emit(f"{type(e).__name__}: {e}")
+        else:
+            self.signals.done.emit(result)
+        self.signals.finished.emit()
+
+
+class QueueManager(QObject):
+    task_added = Signal(int)            # task id
+    task_changed = Signal(int)          # task id
+    task_removed = Signal(int)          # task id
+    queue_running_changed = Signal(bool)
+    error = Signal(str)
+
+    def __init__(self, settings: Settings, rpc: Aria2RPC, parent: QObject | None = None):
+        super().__init__(parent)
+        self.settings = settings
+        self.rpc = rpc
+        self.tasks: dict[int, DownloadTask] = {}
+        self._running = True
+        self._scheduler_allows = True
+        self._pool = QThreadPool.globalInstance()
+        self._inflight: set[_RpcCall] = set()
+        self._auto_paused: set[int] = set()
+        # Tasks whose add_uri RPC is in flight. Maps tid -> deferred actions
+        # the user requested before the gid landed:
+        #   {"pause": True}                — call rpc.pause(gid) on arrival
+        #   {"remove": True, "delete_file": bool}
+        # If "remove" is set, the task has already been hidden from the UI
+        # and dropped from the DB; we keep it in self.tasks so the on_done
+        # callback can still find the gid and dispatch a clean shutdown.
+        self._pending_launch: dict[int, dict] = {}
+        self._poll = QTimer(self)
+        self._poll.setInterval(500)
+        self._poll.timeout.connect(self._poll_active)
+        self._poll.start()
+        db.init()
+        self._load_persisted()
+
+    # ---- persistence --------------------------------------------------
+
+    def _load_persisted(self) -> None:
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM downloads WHERE status IN ('queued','active','paused')"
+            ).fetchall()
+        for row in rows:
+            t = DownloadTask(
+                id=row["id"],
+                url=row["url"],
+                out_dir=row["out_dir"],
+                connections=row["connections"],
+                speed_limit_kbps=row["speed_limit_kbps"],
+                filename=row["filename"],
+                status="queued",  # restart in queued state
+                total_bytes=row["total_bytes"],
+                completed_bytes=row["completed_bytes"],
+                created_at=row["created_at"],
+            )
+            self.tasks[t.id] = t
+
+    def _persist(self, t: DownloadTask) -> None:
+        with db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE downloads
+                SET filename=?, status=?, gid=?, total_bytes=?, completed_bytes=?,
+                    error=?, finished_at=?
+                WHERE id=?
+                """,
+                (
+                    t.filename,
+                    t.status,
+                    t.gid,
+                    t.total_bytes,
+                    t.completed_bytes,
+                    t.error,
+                    t.finished_at,
+                    t.id,
+                ),
+            )
+
+    # ---- public API ---------------------------------------------------
+
+    def add_url(self, url: str) -> Optional[int]:
+        url = url.strip()
+        if not URL_RE.match(url):
+            return None
+        with db.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO downloads
+                    (url, out_dir, connections, speed_limit_kbps, status, created_at)
+                VALUES (?,?,?,?,?,?)
+                """,
+                (
+                    url,
+                    self.settings.download_dir,
+                    self.settings.connections_per_server,
+                    0,
+                    "queued",
+                    time.time(),
+                ),
+            )
+            tid = cur.lastrowid
+        t = DownloadTask(
+            id=tid,
+            url=url,
+            out_dir=self.settings.download_dir,
+            connections=self.settings.connections_per_server,
+        )
+        self.tasks[tid] = t
+        self.task_added.emit(tid)
+        self._maybe_start_next()
+        return tid
+
+    def add_urls(self, urls: list[str]) -> list[int]:
+        return [tid for u in urls if (tid := self.add_url(u)) is not None]
+
+    def pause(self, tid: int) -> None:
+        t = self.tasks.get(tid)
+        if not t or t.status not in {"active", "queued"}:
+            return
+        if t.status == "active" and not t.gid:
+            # add_uri is mid-flight; remember the intent so on_done can
+            # send rpc.pause() once it knows the gid. Reflect it locally
+            # right away so the UI doesn't lie about state.
+            self._pending_launch.setdefault(tid, {})["pause"] = True
+            self._mark_paused(tid)
+            return
+        if t.gid and t.status == "active":
+            self._spawn(self.rpc.pause, t.gid, on_done=lambda _: self._mark_paused(tid))
+        else:
+            self._mark_paused(tid)
+
+    def resume(self, tid: int) -> None:
+        t = self.tasks.get(tid)
+        if not t or t.status not in {"paused", "error"}:
+            return
+        if t.gid and t.status == "paused":
+            # Optimistic flip to active — unpause is just telling aria2 to
+            # resume the existing gid, no new add_uri needed.
+            t.status = "active"
+            t.error = None
+            self._persist(t)
+            self.task_changed.emit(tid)
+            self._spawn(
+                self.rpc.unpause,
+                t.gid,
+                on_fail=lambda msg, tid=tid: self._on_unpause_failed(tid, msg),
+            )
+        else:
+            t.status = "queued"
+            t.error = None
+            self._persist(t)
+            self.task_changed.emit(tid)
+            self._maybe_start_next()
+
+    def remove(self, tid: int, delete_file: bool = False) -> None:
+        t = self.tasks.get(tid)
+        if not t:
+            return
+
+        # Special case: add_uri RPC is in flight. We can't ask aria2 to
+        # remove a gid we don't have yet, so keep the task alive in
+        # self.tasks but hide it from the UI/DB. on_done will dispatch the
+        # actual remove once it learns the gid.
+        if t.status == "active" and not t.gid:
+            self._pending_launch.setdefault(tid, {}).update(
+                {"remove": True, "delete_file": bool(delete_file)}
+            )
+            with db.connect() as conn:
+                conn.execute("DELETE FROM downloads WHERE id=?", (tid,))
+            self.task_removed.emit(tid)
+            return
+
+        # Normal path: drop from local state, ask aria2 to forget the gid
+        # if it had one, optionally unlink the file on disk.
+        self.tasks.pop(tid, None)
+        gid = t.gid
+        path = self._task_path(t)
+        with db.connect() as conn:
+            conn.execute("DELETE FROM downloads WHERE id=?", (tid,))
+        if gid:
+            self._spawn(self.rpc.remove, gid)
+        if delete_file and path and path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        self.task_removed.emit(tid)
+        self._maybe_start_next()
+
+    def resume_persisted(self) -> None:
+        """Kick off any tasks restored from SQLite.
+
+        Call this once aria2's RPC is confirmed up. Without it, items left
+        queued/active/paused at the previous shutdown would sit forever
+        until the user touched the queue.
+        """
+        if self._running and self._scheduler_allows:
+            self._maybe_start_next()
+
+    def clear_completed(self, delete_files: bool = False) -> None:
+        for tid in [t.id for t in self.tasks.values() if t.status == "completed"]:
+            self.remove(tid, delete_file=delete_files)
+
+    def start_queue(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self.queue_running_changed.emit(True)
+        # Resume only items that stop_queue paused (not user-paused ones).
+        for tid in list(self._auto_paused):
+            t = self.tasks.get(tid)
+            if t and t.status == "paused":
+                self.resume(tid)
+        self._auto_paused.clear()
+        self._maybe_start_next()
+
+    def stop_queue(self) -> None:
+        if not self._running:
+            return
+        self._running = False
+        self.queue_running_changed.emit(False)
+        self._auto_paused = {t.id for t in self.tasks.values() if t.status == "active"}
+        self._spawn(self.rpc.pause_all, on_done=lambda _: self._mark_all_active_paused())
+
+    def set_overall_speed_limit(self, kbps: int) -> None:
+        """Push the *active* aria2 cap. Settings persistence is the
+        caller's responsibility — this method must not write the configured
+        kbps back to settings, otherwise toggling the limiter off would
+        clobber the user's chosen value.
+        """
+        self._spawn(self.rpc.set_overall_speed_limit_kbps, kbps)
+
+    def set_max_concurrent(self, n: int) -> None:
+        self.settings.max_concurrent = max(1, n)
+        self.settings.save()
+        self._maybe_start_next()
+
+    def set_scheduler_allowed(self, allowed: bool) -> None:
+        if allowed == self._scheduler_allows:
+            return
+        self._scheduler_allows = allowed
+        if allowed:
+            for tid in list(self._auto_paused):
+                t = self.tasks.get(tid)
+                if t and t.status == "paused":
+                    self.resume(tid)
+            self._auto_paused.clear()
+            if self._running:
+                self._maybe_start_next()
+        else:
+            self._auto_paused |= {t.id for t in self.tasks.values() if t.status == "active"}
+            self._spawn(self.rpc.pause_all, on_done=lambda _: self._mark_all_active_paused())
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    # ---- internals ----------------------------------------------------
+
+    def _spawn(self, fn, *args, on_done=None, on_fail=None, **kwargs):
+        call = _RpcCall(fn, *args, **kwargs)
+        if on_done is not None:
+            call.signals.done.connect(on_done)
+        if on_fail is not None:
+            call.signals.failed.connect(on_fail)
+        else:
+            call.signals.failed.connect(self.error.emit)
+        self._inflight.add(call)
+        call.signals.finished.connect(lambda c=call: self._inflight.discard(c))
+        self._pool.start(call)
+
+    def _active_count(self) -> int:
+        return sum(1 for t in self.tasks.values() if t.status == "active")
+
+    def _maybe_start_next(self) -> None:
+        if not self._running or not self._scheduler_allows:
+            return
+        slots = max(0, self.settings.max_concurrent - self._active_count())
+        if slots <= 0:
+            return
+        ready = sorted(
+            (t for t in self.tasks.values() if t.status == "queued"),
+            key=lambda t: t.created_at,
+        )
+        for t in ready[:slots]:
+            self._launch(t)
+
+    def _launch(self, t: DownloadTask) -> None:
+        t.status = "active"
+        t.error = None
+        self._persist(t)
+        self.task_changed.emit(t.id)
+        self._pending_launch[t.id] = {}
+
+        def on_done(gid: str, tid: int = t.id) -> None:
+            pending = self._pending_launch.pop(tid, {})
+            tt = self.tasks.get(tid)
+
+            # Deferred remove wins over deferred pause: the user said
+            # "drop this", so do that and don't bother pausing first.
+            if pending.get("remove"):
+                self._spawn(self.rpc.remove, gid)
+                # Pop the still-tracked task so the polling loop forgets it.
+                tt = self.tasks.pop(tid, None)
+                # We can't reliably unlink the on-disk file here because
+                # we never learned its name (filename is set by the first
+                # status poll, which we skipped by removing). The download
+                # was barely started, so the partial file is small.
+                self._maybe_start_next()
+                return
+
+            if tt is None:
+                # Task vanished some other way; clean up the gid in aria2
+                # so we don't leak it and bail.
+                self._spawn(self.rpc.remove, gid)
+                return
+
+            tt.gid = gid
+
+            if pending.get("pause"):
+                # User paused before gid landed — local state is already
+                # "paused"; tell aria2 to actually pause the download.
+                self._spawn(self.rpc.pause, gid)
+                self._persist(tt)
+                self._maybe_start_next()
+                return
+
+            self._persist(tt)
+            self.task_changed.emit(tid)
+
+        def on_fail(msg: str, tid: int = t.id) -> None:
+            pending = self._pending_launch.pop(tid, {})
+            tt = self.tasks.get(tid)
+
+            # If the user already removed the task, the failure is moot —
+            # the local row and DB entry are already gone.
+            if pending.get("remove"):
+                self.tasks.pop(tid, None)
+                self._maybe_start_next()
+                return
+
+            if not tt:
+                return
+            tt.status = "error"
+            tt.error = msg
+            self._persist(tt)
+            self.task_changed.emit(tid)
+            self._maybe_start_next()
+
+        self._spawn(
+            self.rpc.add_uri,
+            [t.url],
+            t.out_dir,
+            t.connections,
+            t.speed_limit_kbps,
+            t.filename,
+            on_done=on_done,
+            on_fail=on_fail,
+        )
+
+    def _on_unpause_failed(self, tid: int, msg: str) -> None:
+        t = self.tasks.get(tid)
+        if not t:
+            return
+        t.status = "paused"
+        t.error = msg
+        self._persist(t)
+        self.task_changed.emit(tid)
+        self.error.emit(msg)
+
+    def _mark_paused(self, tid: int) -> None:
+        t = self.tasks.get(tid)
+        if not t:
+            return
+        t.status = "paused"
+        self._persist(t)
+        self.task_changed.emit(tid)
+        self._maybe_start_next()
+
+    def _mark_all_active_paused(self) -> None:
+        for t in self.tasks.values():
+            if t.status == "active":
+                t.status = "paused"
+                self._persist(t)
+                self.task_changed.emit(t.id)
+
+    def _poll_active(self) -> None:
+        active = [t for t in self.tasks.values() if t.status in {"active", "paused"} and t.gid]
+        if not active:
+            return
+        for t in active:
+            self._spawn(
+                self.rpc.tell_status,
+                t.gid,
+                on_done=lambda status, tid=t.id: self._apply_status(tid, status),
+                on_fail=lambda *_: None,
+            )
+
+    def _apply_status(self, tid: int, status: dict) -> None:
+        t = self.tasks.get(tid)
+        if not t:
+            return
+        try:
+            t.total_bytes = int(status.get("totalLength", 0))
+            t.completed_bytes = int(status.get("completedLength", 0))
+            t.download_speed = int(status.get("downloadSpeed", 0))
+            t.last_status_at = time.time()
+        except (TypeError, ValueError):
+            pass
+        files = status.get("files") or []
+        if files and not t.filename:
+            path = files[0].get("path") or ""
+            if path:
+                from pathlib import Path
+                t.filename = Path(path).name
+        a2_status = status.get("status")
+        if a2_status == "complete":
+            t.status = "completed"
+            t.finished_at = time.time()
+            self._persist(t)
+            self.task_changed.emit(tid)
+            self._maybe_start_next()
+        elif a2_status == "error":
+            t.status = "error"
+            t.error = status.get("errorMessage") or f"aria2 error {status.get('errorCode')}"
+            t.finished_at = time.time()
+            self._persist(t)
+            self.task_changed.emit(tid)
+            self._maybe_start_next()
+        else:
+            # Progress-only update. Don't let poll responses overwrite local
+            # pause/active intent — Cove drives those transitions via explicit
+            # RPC calls and waits for the on_done callback.
+            self.task_changed.emit(tid)
+
+    def _task_path(self, t: DownloadTask):
+        if not t.filename:
+            return None
+        from pathlib import Path
+        return Path(t.out_dir) / t.filename

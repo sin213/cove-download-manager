@@ -1,0 +1,424 @@
+"""Reusable cove widgets.
+
+Mirrors the visual primitives used in cove-compressor / cove-screen-recorder:
+    * Titlebar       — frameless bar with brand badge, title, version, controls
+    * BrandBadge     — DPR-aware QPainter render of cove_icon.png so the
+                       skull stays crisp at small sizes
+    * IconButton     — QPainter min/max/restore/close glyphs
+    * FramelessResizer — installs an event filter so the QMainWindow
+                         supports edge-drag resize via startSystemResize()
+    * StatusPill / Section / StatsStrip / Footer — content widgets
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+)
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+
+def find_icon() -> Path | None:
+    """Locate cove_icon.png. Works from source, from PyInstaller bundles
+    (one-file via _MEIPASS, one-dir via sys.executable), from the
+    python-appimage layout, and from the cove-compressor-style AppImage
+    (icon at $APPDIR root + hicolor tree)."""
+    import os
+    import sys
+
+    here = Path(__file__).resolve().parent
+    candidates: list[Path] = [
+        here / "cove_icon.png",                     # package data
+        here.parent / "cove_icon.png",              # source-tree root
+        Path.cwd() / "cove_icon.png",
+    ]
+
+    # PyInstaller one-file: assets are extracted under _MEIPASS at runtime.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.insert(0, Path(meipass) / "cove" / "cove_icon.png")
+        candidates.insert(0, Path(meipass) / "cove_icon.png")
+
+    # PyInstaller one-dir: assets sit next to the executable (or under
+    # _internal/ depending on the PyInstaller version).
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates += [
+            exe_dir / "cove" / "cove_icon.png",
+            exe_dir / "_internal" / "cove" / "cove_icon.png",
+            exe_dir / "cove_icon.png",
+        ]
+
+    appdir = os.environ.get("APPDIR")
+    if appdir:
+        appdir_path = Path(appdir)
+        candidates += [
+            appdir_path / "cove_icon.png",
+            appdir_path / "cove.png",
+            appdir_path / "usr/share/icons/hicolor/256x256/apps/cove.png",
+            appdir_path / "usr/share/icons/hicolor/256x256/apps/cove-download-manager.png",
+            appdir_path / "usr/share/icons/hicolor/512x512/apps/cove.png",
+            appdir_path / "usr/lib/cove-download-manager/cove/cove_icon.png",
+        ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+# ── Brand badge — Cove icon inside a rounded square ────────────────────────
+class BrandBadge(QLabel):
+    """Square tile with the Cove icon centered inside.
+
+    The source PNG is 512x512. We render to a high-DPR pixmap so the icon
+    stays crisp on HiDPI and standard displays alike — that's the
+    difference between a sharp icon and the blurry one a naive
+    `QLabel.setPixmap(QPixmap.scaled(...))` produces.
+    """
+
+    def __init__(self, size: int = 26):
+        super().__init__()
+        self.setFixedSize(size, size)
+        self.setAlignment(Qt.AlignCenter)
+        self._src: QPixmap | None = None
+        path = find_icon()
+        if path is not None:
+            pm = QPixmap(str(path))
+            if not pm.isNull():
+                self._src = pm
+
+    def paintEvent(self, _event):
+        from .theme import BORDER_HEX_STRONG, SURFACE
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        p.setPen(QPen(QColor(BORDER_HEX_STRONG), 1))
+        p.setBrush(QColor(SURFACE))
+        r = self.rect().adjusted(0, 0, -1, -1)
+        p.drawRoundedRect(r, 6, 6)
+        if self._src is not None:
+            dpr = max(1.0, float(self.devicePixelRatioF()))
+            side = self.width() - 6
+            target = self._src.scaled(
+                int(side * dpr),
+                int(side * dpr),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            target.setDevicePixelRatio(dpr)
+            x = (self.width() - side) // 2
+            y = (self.height() - side) // 2
+            p.drawPixmap(x, y, side, side, target)
+        p.end()
+
+
+# ── Window control buttons (painted glyphs, no fonts/SVG) ─────────────────
+class _CtrlButton(QToolButton):
+    def __init__(self, kind: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setFixedSize(32, 28)
+        self.setObjectName("CtrlBtn")
+        self.setCursor(Qt.ArrowCursor)
+        self._kind = kind
+        self.setAutoRaise(True)
+
+    def sizeHint(self) -> QSize:
+        return QSize(32, 28)
+
+    def paintEvent(self, _event):
+        super().paintEvent(_event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        color = self.palette().color(self.foregroundRole())
+        p.setPen(QPen(color, 1.6))
+        p.setBrush(Qt.NoBrush)
+        cx, cy = self.width() / 2, self.height() / 2
+        if self._kind == "min":
+            p.drawLine(int(cx - 5), int(cy), int(cx + 5), int(cy))
+        elif self._kind == "max":
+            p.drawRect(QRect(int(cx - 5), int(cy - 5), 10, 10))
+        elif self._kind == "restore":
+            p.drawRect(QRect(int(cx - 5), int(cy - 3), 8, 8))
+            p.drawRect(QRect(int(cx - 3), int(cy - 5), 8, 8))
+        elif self._kind == "close":
+            p.drawLine(int(cx - 5), int(cy - 5), int(cx + 5), int(cy + 5))
+            p.drawLine(int(cx + 5), int(cy - 5), int(cx - 5), int(cy + 5))
+        p.end()
+
+
+class Titlebar(QFrame):
+    """Frameless-window drag bar.
+
+    Drag is delegated to the windowing system via `startSystemMove()` —
+    that's the only approach that works on Wayland (clients can't move
+    themselves). Double-click toggles maximize.
+    """
+
+    def __init__(
+        self,
+        window: QMainWindow,
+        app_name: str,
+        version: str,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setObjectName("titlebar")
+        self.setFixedHeight(38)
+        self._window = window
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 0, 6, 0)
+        lay.setSpacing(10)
+
+        self.badge = BrandBadge(22)
+        lay.addWidget(self.badge, 0, Qt.AlignVCenter)
+
+        primary = QLabel(app_name)
+        primary.setObjectName("titlebarTitle")
+        primary.setProperty("role", "primary")
+        lay.addWidget(primary, 0, Qt.AlignVCenter)
+
+        ver = QLabel(f"v{version}")
+        ver.setObjectName("titlebarVer")
+        lay.addWidget(ver, 0, Qt.AlignVCenter)
+
+        lay.addStretch(1)
+
+        self.min_btn = _CtrlButton("min")
+        self.min_btn.setToolTip("Minimize")
+        self.min_btn.clicked.connect(self._window.showMinimized)
+        lay.addWidget(self.min_btn)
+
+        self.max_btn = _CtrlButton("max")
+        self.max_btn.setToolTip("Maximize")
+        self.max_btn.clicked.connect(self._toggle_maximize)
+        lay.addWidget(self.max_btn)
+
+        self.close_btn = _CtrlButton("close")
+        self.close_btn.setObjectName("CloseBtn")
+        self.close_btn.setToolTip("Close")
+        self.close_btn.clicked.connect(self._window.close)
+        lay.addWidget(self.close_btn)
+
+    def _toggle_maximize(self) -> None:
+        if self._window.isMaximized():
+            self._window.showNormal()
+            self.max_btn._kind = "max"
+        else:
+            self._window.showMaximized()
+            self.max_btn._kind = "restore"
+        self.max_btn.update()
+
+    # ── drag / double-click ───────────────────────────────────────────
+    def _on_button(self, child: QWidget | None) -> bool:
+        while child is not None:
+            if isinstance(child, QToolButton):
+                return True
+            child = child.parentWidget()
+        return False
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and not self._on_button(self.childAt(event.pos())):
+            handle = self._window.windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and not self._on_button(self.childAt(event.pos())):
+            self._toggle_maximize()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
+class FramelessResizer(QObject):
+    """Lets a frameless QMainWindow be resized from its edges via
+    `startSystemResize()`. Cross-platform; no WM-specific glue."""
+
+    BORDER = 6
+
+    def __init__(self, window: QMainWindow):
+        super().__init__(window)
+        self._w = window
+        window.setMouseTracking(True)
+        window.installEventFilter(self)
+
+    def _edge_for(self, pos: QPoint) -> Qt.Edges:
+        w = self._w
+        if w.isMaximized() or w.isFullScreen():
+            return Qt.Edges()
+        r = w.rect()
+        b = self.BORDER
+        edges = Qt.Edges()
+        if pos.x() <= b:
+            edges |= Qt.LeftEdge
+        elif pos.x() >= r.width() - b:
+            edges |= Qt.RightEdge
+        if pos.y() <= b:
+            edges |= Qt.TopEdge
+        elif pos.y() >= r.height() - b:
+            edges |= Qt.BottomEdge
+        return edges
+
+    def _cursor_for(self, edges: Qt.Edges):
+        h = bool(edges & (Qt.LeftEdge | Qt.RightEdge))
+        v = bool(edges & (Qt.TopEdge | Qt.BottomEdge))
+        if h and v:
+            tl_br = (
+                (edges & (Qt.TopEdge | Qt.LeftEdge)) == (Qt.TopEdge | Qt.LeftEdge)
+                or (edges & (Qt.BottomEdge | Qt.RightEdge))
+                == (Qt.BottomEdge | Qt.RightEdge)
+            )
+            return Qt.SizeFDiagCursor if tl_br else Qt.SizeBDiagCursor
+        if h:
+            return Qt.SizeHorCursor
+        if v:
+            return Qt.SizeVerCursor
+        return None
+
+    def eventFilter(self, obj, event):
+        if obj is not self._w:
+            return False
+        et = event.type()
+        if et == QEvent.MouseMove and not (event.buttons() & Qt.LeftButton):
+            edges = self._edge_for(event.position().toPoint())
+            shape = self._cursor_for(edges)
+            if shape is not None:
+                self._w.setCursor(shape)
+            else:
+                self._w.unsetCursor()
+        elif et == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            edges = self._edge_for(event.position().toPoint())
+            if edges:
+                handle = self._w.windowHandle()
+                if handle is not None:
+                    handle.startSystemResize(edges)
+                    return True
+        elif et == QEvent.Leave:
+            self._w.unsetCursor()
+        return False
+
+
+class StatusPill(QLabel):
+    """Uppercase mono badge whose color responds to a `state` property."""
+
+    def __init__(self, text: str = "", parent: QWidget | None = None):
+        super().__init__(text.upper(), parent)
+        self.setObjectName("statusPill")
+        self.setAlignment(Qt.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+
+    def set_state(self, state: str, text: str) -> None:
+        """state in {ok, paused, error, off}."""
+        self.setText(text.upper())
+        self.setProperty("state", state)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
+class Section(QFrame):
+    """Bordered surface card with optional uppercase label and content."""
+
+    def __init__(self, label: str | None = None, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setProperty("role", "section")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setSpacing(8)
+        if label:
+            lab = QLabel(label.upper())
+            lab.setProperty("role", "section-label")
+            outer.addWidget(lab)
+        self._body = QVBoxLayout()
+        self._body.setContentsMargins(0, 0, 0, 0)
+        self._body.setSpacing(10)
+        outer.addLayout(self._body)
+
+    def body(self) -> QVBoxLayout:
+        return self._body
+
+
+class StatsStrip(QFrame):
+    """Horizontal row of (KEY, value) mono cells."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("statsStrip")
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(0)
+        self._values: dict[str, QLabel] = {}
+
+    def add_cell(self, key: str, value: str = "—", *, last: bool = False) -> None:
+        cell = QFrame()
+        cell.setObjectName("statCellLast" if last else "statCell")
+        v = QVBoxLayout(cell)
+        v.setContentsMargins(14, 10, 14, 10)
+        v.setSpacing(2)
+        k_lab = QLabel(key.upper())
+        k_lab.setObjectName("statKey")
+        val_lab = QLabel(value)
+        val_lab.setObjectName("statValue")
+        v.addWidget(k_lab)
+        v.addWidget(val_lab)
+        self._lay.addWidget(cell, 1)
+        self._values[key] = val_lab
+
+    def set_value(self, key: str, value: str) -> None:
+        if key in self._values:
+            self._values[key].setText(value)
+
+
+class Footer(QFrame):
+    """Bottom hotkey/info strip."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("footer")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(28, 8, 28, 8)
+        lay.setSpacing(18)
+
+        self._items_lay = QHBoxLayout()
+        self._items_lay.setSpacing(18)
+        lay.addLayout(self._items_lay, 1)
+
+        self.platform = QLabel("")
+        self.platform.setObjectName("footerPlatform")
+        lay.addWidget(self.platform, 0, Qt.AlignRight)
+
+    def add_hotkey(self, label: str, keys: str) -> None:
+        from .theme import TEXT_DIM, TEXT_FAINT
+
+        text = (
+            f'<span style="color:{TEXT_FAINT}; font-family:Geist Mono,monospace;'
+            f' font-size:8pt; letter-spacing:2px; text-transform:uppercase;">{label.upper()}</span>'
+            f'  <span style="color:{TEXT_DIM}; font-family:Geist Mono,monospace; font-size:9pt;">{keys}</span>'
+        )
+        item = QLabel(text)
+        item.setTextFormat(Qt.RichText)
+        self._items_lay.addWidget(item)
+
+    def set_platform(self, text: str) -> None:
+        self.platform.setText(text)

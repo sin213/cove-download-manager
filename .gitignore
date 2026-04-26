@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.buildenv/
+
+# Build / package outputs (transient). build/recipe/ is source — it's the
+# python-appimage recipe consumed by build.sh, so keep that one.
+build/*
+!build/recipe/
+!build/recipe/**
+dist/
+release/
+*.spec
+cove_icon.ico
+
+# Local cove runtime state (only relevant when running from the source tree)
+cove/cove_icon.png
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

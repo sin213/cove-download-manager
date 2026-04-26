@@ -1,0 +1,5 @@
+PySide6>=6.5
+requests>=2.31
+# The third entry is the absolute path to the cove-download-manager
+# checkout — build.sh rewrites this file before invoking python-appimage.
+.

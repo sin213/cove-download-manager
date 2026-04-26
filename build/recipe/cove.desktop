@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Cove Download Manager
+GenericName=Download Manager
+Comment=Multi-connection downloads with a queue, schedule, and global speed cap
+Exec=AppRun
+Icon=cove
+Terminal=false
+Categories=Network;FileTransfer;Qt;
+StartupNotify=true
+StartupWMClass=Cove

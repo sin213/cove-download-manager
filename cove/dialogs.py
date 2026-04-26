@@ -1,0 +1,308 @@
+"""Dialogs in the cove-screen-recorder visual idiom: dialog title, optional
+subtitle, sections / form rows, accent OK / ghost Cancel.
+"""
+from __future__ import annotations
+
+from PySide6.QtCore import QTime, Qt
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QTimeEdit,
+    QVBoxLayout,
+)
+
+from .clipboard import extract_urls
+from .config import CONNECTION_CHOICES, ScheduleWindow, Settings
+
+
+def _make_buttons(parent: QDialog, ok_text: str = "Save") -> QDialogButtonBox:
+    bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    ok = bb.button(QDialogButtonBox.Ok)
+    ok.setText(ok_text)
+    ok.setProperty("kind", "accent")
+    bb.accepted.connect(parent.accept)
+    bb.rejected.connect(parent.reject)
+    return bb
+
+
+def _title_block(layout: QVBoxLayout, title: str, subtitle: str | None = None) -> None:
+    t = QLabel(title)
+    t.setObjectName("dialogTitle")
+    layout.addWidget(t)
+    if subtitle:
+        s = QLabel(subtitle)
+        s.setObjectName("dialogSubtitle")
+        layout.addWidget(s)
+
+
+def _make_connections_combo(current: int) -> QComboBox:
+    """IDM-style connections dropdown (1, 2, 4, 8, 16, 24, 32)."""
+    combo = QComboBox()
+    for n in CONNECTION_CHOICES:
+        combo.addItem(str(n), n)
+    closest = min(CONNECTION_CHOICES, key=lambda v: abs(v - current))
+    combo.setCurrentIndex(CONNECTION_CHOICES.index(closest))
+    return combo
+
+
+def _time_format(use_24h: bool) -> str:
+    return "HH:mm" if use_24h else "hh:mm AP"
+
+
+class AddDownloadDialog(QDialog):
+    def __init__(self, settings: Settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add download")
+        self.setMinimumWidth(560)
+        self.settings = settings
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        _title_block(layout, "Add download", "Paste one or more URLs, one per line.")
+
+        self.urls = QPlainTextEdit()
+        self.urls.setPlaceholderText("https://example.com/file.zip")
+        self.urls.setMinimumHeight(140)
+        layout.addWidget(self.urls)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        self.dir_edit = QLineEdit(settings.download_dir)
+        browse = QPushButton("Browse")
+        browse.clicked.connect(self._browse)
+        row = QHBoxLayout()
+        row.addWidget(self.dir_edit, 1)
+        row.addWidget(browse)
+        form.addRow("Save to", row)
+        layout.addLayout(form)
+
+        layout.addWidget(_make_buttons(self, ok_text="Add"))
+
+    def _browse(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Save downloads to", self.dir_edit.text())
+        if path:
+            self.dir_edit.setText(path)
+
+    def get_urls(self) -> list[str]:
+        text = self.urls.toPlainText()
+        urls = extract_urls(text)
+        if urls:
+            return urls
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    def get_dir(self) -> str:
+        return self.dir_edit.text().strip() or self.settings.download_dir
+
+
+class ClipboardBatchDialog(QDialog):
+    def __init__(self, urls: list[str], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add from clipboard")
+        self.setMinimumWidth(560)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        _title_block(
+            layout,
+            "Add from clipboard",
+            f"Found {len(urls)} URL(s). Pick which to queue.",
+        )
+
+        self.list = QListWidget()
+        self.list.setSelectionMode(QListWidget.NoSelection)
+        for u in urls:
+            item = QListWidgetItem(u)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            self.list.addItem(item)
+        layout.addWidget(self.list, 1)
+
+        controls = QHBoxLayout()
+        select_all = QPushButton("Select all")
+        none_btn = QPushButton("Select none")
+        select_all.clicked.connect(lambda: self._set_all(True))
+        none_btn.clicked.connect(lambda: self._set_all(False))
+        controls.addWidget(select_all)
+        controls.addWidget(none_btn)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+        layout.addWidget(_make_buttons(self, ok_text="Queue"))
+
+    def _set_all(self, checked: bool) -> None:
+        state = Qt.Checked if checked else Qt.Unchecked
+        for i in range(self.list.count()):
+            self.list.item(i).setCheckState(state)
+
+    def selected(self) -> list[str]:
+        out: list[str] = []
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            if it.checkState() == Qt.Checked:
+                out.append(it.text())
+        return out
+
+
+_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+class SchedulerDialog(QDialog):
+    def __init__(self, window: ScheduleWindow, settings: Settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Schedule")
+        self.setMinimumWidth(440)
+        self.settings = settings
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        _title_block(layout, "Schedule", "Restrict downloads to a daily time window.")
+
+        self.enabled = QCheckBox("Enable scheduled window")
+        self.enabled.setChecked(window.enabled)
+        layout.addWidget(self.enabled)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        fmt = _time_format(settings.time_format_24h)
+        self.start = QTimeEdit(QTime(window.start_hour, window.start_minute))
+        self.start.setDisplayFormat(fmt)
+        self.end = QTimeEdit(QTime(window.end_hour, window.end_minute))
+        self.end.setDisplayFormat(fmt)
+        form.addRow("Start", self.start)
+        form.addRow("End", self.end)
+        layout.addLayout(form)
+
+        # Time format toggle.
+        self.use_24h = QCheckBox("24-hour format")
+        self.use_24h.setChecked(settings.time_format_24h)
+        self.use_24h.toggled.connect(self._on_format_toggled)
+        layout.addWidget(self.use_24h)
+
+        days_group = QGroupBox("Days")
+        grid = QGridLayout(days_group)
+        grid.setSpacing(8)
+        self._day_boxes: list[QCheckBox] = []
+        for i, name in enumerate(_DAYS):
+            box = QCheckBox(name)
+            box.setChecked(i in window.days)
+            self._day_boxes.append(box)
+            grid.addWidget(box, i // 4, i % 4)
+        layout.addWidget(days_group)
+
+        hint = QLabel("If End is on or before Start, the window wraps past midnight.")
+        hint.setProperty("role", "muted")
+        layout.addWidget(hint)
+
+        layout.addWidget(_make_buttons(self, ok_text="Save"))
+
+    def _on_format_toggled(self, checked: bool) -> None:
+        fmt = _time_format(checked)
+        self.start.setDisplayFormat(fmt)
+        self.end.setDisplayFormat(fmt)
+
+    def result_window(self) -> ScheduleWindow:
+        return ScheduleWindow(
+            enabled=self.enabled.isChecked(),
+            start_hour=self.start.time().hour(),
+            start_minute=self.start.time().minute(),
+            end_hour=self.end.time().hour(),
+            end_minute=self.end.time().minute(),
+            days=[i for i, b in enumerate(self._day_boxes) if b.isChecked()],
+        )
+
+    def use_24h_format(self) -> bool:
+        return self.use_24h.isChecked()
+
+
+class SettingsDialog(QDialog):
+    def __init__(self, settings: Settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(540)
+        self.settings = settings
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        _title_block(layout, "Settings", "Defaults applied to new downloads.")
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.dir_edit = QLineEdit(settings.download_dir)
+        browse = QPushButton("Browse")
+        browse.clicked.connect(self._browse)
+        row = QHBoxLayout()
+        row.addWidget(self.dir_edit, 1)
+        row.addWidget(browse)
+        form.addRow("Default download folder", row)
+
+        self.connections = _make_connections_combo(settings.connections_per_server)
+        form.addRow("Connections per file", self.connections)
+
+        self.max_concurrent = QSpinBox()
+        self.max_concurrent.setRange(1, 16)
+        self.max_concurrent.setValue(settings.max_concurrent)
+        form.addRow("Concurrent downloads", self.max_concurrent)
+
+        self.speed_limit = QSpinBox()
+        self.speed_limit.setRange(0, 1_000_000)
+        self.speed_limit.setSuffix(" KB/s")
+        self.speed_limit.setSpecialValueText("Unlimited")
+        self.speed_limit.setValue(settings.overall_speed_limit_kbps)
+        form.addRow("Global speed limit", self.speed_limit)
+
+        self.use_24h = QCheckBox("24-hour clock in scheduler")
+        self.use_24h.setChecked(settings.time_format_24h)
+        form.addRow("Time format", self.use_24h)
+
+        self.auto_update = QCheckBox("Check for updates on startup")
+        self.auto_update.setChecked(settings.auto_update_check)
+        self.auto_update.setToolTip(
+            "When enabled, Cove pings GitHub Releases on launch and prompts "
+            "you if a newer version is available. Updates are never installed "
+            "silently — you'll always be asked first."
+        )
+        form.addRow("Updates", self.auto_update)
+
+        layout.addLayout(form)
+        layout.addWidget(_make_buttons(self, ok_text="Save"))
+        bb = layout.itemAt(layout.count() - 1).widget()
+        bb.accepted.disconnect()
+        bb.accepted.connect(self._on_accept)
+
+    def _browse(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Default download folder", self.dir_edit.text())
+        if path:
+            self.dir_edit.setText(path)
+
+    def _on_accept(self) -> None:
+        self.settings.download_dir = self.dir_edit.text().strip() or self.settings.download_dir
+        self.settings.connections_per_server = self.connections.currentData()
+        self.settings.max_concurrent = self.max_concurrent.value()
+        self.settings.overall_speed_limit_kbps = self.speed_limit.value()
+        self.settings.time_format_24h = self.use_24h.isChecked()
+        self.settings.auto_update_check = self.auto_update.isChecked()
+        self.settings.save()
+        self.accept()
