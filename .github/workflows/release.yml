@@ -46,6 +46,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends libfuse2 desktop-file-utils
           python -m pip install --upgrade pip
           python -m pip install --user python-appimage
+          # build.sh expects appimagetool either at python-appimage's cache
+          # path or on PATH. python-appimage --no-packaging skips fetching
+          # it, so we install it ourselves into /usr/local/bin.
+          sudo curl -fsSL -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
+          appimagetool --version || true
 
       - name: Build AppImage
         run: |
