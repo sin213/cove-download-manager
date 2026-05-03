@@ -254,12 +254,15 @@ jobs:
           $portDst = "release/Cove-Download-Manager-$version-Portable.exe"
           Copy-Item -Force $portSrc $portDst
           $setup   = "release/Cove-Download-Manager-$version-Setup.exe"
+          # Write sidecars with LF endings (not CRLF) so `sha256sum -c`
+          # on Linux can read the filename without the trailing CR.
+          $ascii = New-Object System.Text.ASCIIEncoding
           foreach ($f in @($setup, $portDst)) {
             if (Test-Path $f) {
               $h = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
               $name = Split-Path $f -Leaf
-              "$h  $name" | Out-File -Encoding ASCII -NoNewline "$f.sha256"
-              Add-Content -Path "$f.sha256" -Value ""
+              $line = "$h  $name`n"
+              [IO.File]::WriteAllBytes("$f.sha256", $ascii.GetBytes($line))
             }
           }
           Get-ChildItem release | Format-Table -AutoSize
