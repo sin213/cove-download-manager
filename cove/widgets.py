@@ -483,11 +483,20 @@ class Footer(QFrame):
         self.setObjectName("footer")
         lay = QHBoxLayout(self)
         lay.setContentsMargins(28, 8, 28, 8)
-        lay.setSpacing(18)
+        lay.setSpacing(0)
 
+        items_wrap = QWidget()
         self._items_lay = QHBoxLayout()
-        self._items_lay.setSpacing(14)
-        lay.addLayout(self._items_lay, 1)
+        self._items_lay.setContentsMargins(0, 0, 0, 0)
+        self._items_lay.setSpacing(22)
+        items_wrap.setLayout(self._items_lay)
+        items_wrap.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        lay.addWidget(items_wrap, 0, Qt.AlignLeft)
+        lay.addStretch(1)
+
+        right = QHBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(20)
 
         # Folder chip — clickable, opens the downloads folder.
         self.folder_btn = QPushButton("")
@@ -495,11 +504,14 @@ class Footer(QFrame):
         self.folder_btn.setCursor(Qt.PointingHandCursor)
         self.folder_btn.setVisible(False)
         self.folder_btn.clicked.connect(self.folder_clicked.emit)
-        lay.addWidget(self.folder_btn, 0, Qt.AlignRight)
+        self.folder_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        right.addWidget(self.folder_btn, 0, Qt.AlignRight)
 
         self.platform = QLabel("")
         self.platform.setObjectName("footerPlatform")
-        lay.addWidget(self.platform, 0, Qt.AlignRight)
+        self.platform.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        right.addWidget(self.platform, 0, Qt.AlignRight)
+        lay.addLayout(right)
 
     def add_hotkey(self, label: str, keys: str) -> None:
         wrap = QFrame()
@@ -512,6 +524,7 @@ class Footer(QFrame):
         key.setObjectName("footerKey")
         h.addWidget(lab)
         h.addWidget(key)
+        wrap.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         self._items_lay.addWidget(wrap)
 
     def set_platform(self, text: str) -> None:
