@@ -496,7 +496,7 @@ class MainWindow(QMainWindow):
         self.clip_btn.clicked.connect(self._add_from_clipboard)
         row.addWidget(self.clip_btn)
 
-        self.open_folder_btn = QPushButton("Open download folder")
+        self.open_folder_btn = QPushButton("Open downloads folder")
         self.open_folder_btn.setToolTip("Open where new downloads are saved")
         self.open_folder_btn.clicked.connect(self._open_downloads_folder)
         row.addWidget(self.open_folder_btn)
