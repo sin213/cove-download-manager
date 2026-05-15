@@ -111,10 +111,11 @@ class AddDownloadDialog(QDialog):
 
 
 class ClipboardBatchDialog(QDialog):
-    def __init__(self, urls: list[str], parent=None):
+    def __init__(self, urls: list[str], settings: Settings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Add from clipboard")
         self.setMinimumWidth(560)
+        self.settings = settings
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -135,6 +136,17 @@ class ClipboardBatchDialog(QDialog):
             self.list.addItem(item)
         layout.addWidget(self.list, 1)
 
+        form = QFormLayout()
+        form.setSpacing(10)
+        self.dir_edit = QLineEdit(settings.download_dir)
+        browse = QPushButton("Browse")
+        browse.clicked.connect(self._browse)
+        row = QHBoxLayout()
+        row.addWidget(self.dir_edit, 1)
+        row.addWidget(browse)
+        form.addRow("Save to", row)
+        layout.addLayout(form)
+
         controls = QHBoxLayout()
         select_all = QPushButton("Select all")
         none_btn = QPushButton("Select none")
@@ -146,6 +158,11 @@ class ClipboardBatchDialog(QDialog):
         layout.addLayout(controls)
 
         layout.addWidget(_make_buttons(self, ok_text="Queue"))
+
+    def _browse(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Save downloads to", self.dir_edit.text())
+        if path:
+            self.dir_edit.setText(path)
 
     def _set_all(self, checked: bool) -> None:
         state = Qt.Checked if checked else Qt.Unchecked
@@ -159,6 +176,9 @@ class ClipboardBatchDialog(QDialog):
             if it.checkState() == Qt.Checked:
                 out.append(it.text())
         return out
+
+    def get_dir(self) -> str:
+        return self.dir_edit.text().strip() or self.settings.download_dir
 
 
 _DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]

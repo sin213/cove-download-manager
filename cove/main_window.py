@@ -15,6 +15,7 @@ import platform as _platform
 import shutil
 import subprocess
 import sys
+from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -95,6 +96,34 @@ def _human_speed(bps: int) -> str:
     if bps <= 0:
         return "—"
     return f"{_human_bytes(bps)}/s"
+
+
+def _human_eta(seconds: int) -> str:
+    if seconds <= 0:
+        return "—"
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes:02d}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours:02d}h"
+
+
+def _speed_eta(task: DownloadTask, completed: int) -> str:
+    if task.status != "active" or task.download_speed <= 0:
+        return "—"
+    speed = _human_speed(task.download_speed)
+    if task.total_bytes <= 0:
+        return speed
+    remaining = max(0, task.total_bytes - completed)
+    if remaining <= 0:
+        return speed
+    eta = _human_eta(ceil(remaining / task.download_speed))
+    return f"{speed} · ETA {eta}"
 
 
 def _human_cap(kbps: int) -> str:
@@ -363,12 +392,14 @@ class MainWindow(QMainWindow):
         self.tree.customContextMenuRequested.connect(self._open_context_menu)
 
         header = self.tree.header()
-        header.setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
-        header.setSectionResizeMode(COL_STATUS, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_PROGRESS, QHeaderView.Fixed)
+        header.setStretchLastSection(False)
+        for col in range(self.tree.columnCount()):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        header.resizeSection(COL_NAME, 360)
+        header.resizeSection(COL_STATUS, 120)
         header.resizeSection(COL_PROGRESS, 220)
-        header.setSectionResizeMode(COL_SIZE, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_SPEED, QHeaderView.ResizeToContents)
+        header.resizeSection(COL_SIZE, 170)
+        header.resizeSection(COL_SPEED, 160)
         stage.addWidget(self.tree, 1)
 
         self._items: dict[int, QTreeWidgetItem] = {}
@@ -453,7 +484,8 @@ class MainWindow(QMainWindow):
 
     def _build_actionbar(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        row.setSpacing(10)
+        row.setContentsMargins(0, 2, 0, 2)
+        row.setSpacing(12)
 
         self.add_btn = QPushButton("Add download")
         self.add_btn.setProperty("kind", "accent")
@@ -464,8 +496,8 @@ class MainWindow(QMainWindow):
         self.clip_btn.clicked.connect(self._add_from_clipboard)
         row.addWidget(self.clip_btn)
 
-        self.open_folder_btn = QPushButton("Open downloads folder")
-        self.open_folder_btn.setToolTip("Reveal where new downloads are saved")
+        self.open_folder_btn = QPushButton("Open download folder")
+        self.open_folder_btn.setToolTip("Open where new downloads are saved")
         self.open_folder_btn.clicked.connect(self._open_downloads_folder)
         row.addWidget(self.open_folder_btn)
 
@@ -521,11 +553,12 @@ class MainWindow(QMainWindow):
                 self, "Clipboard empty", "No URLs found on the clipboard."
             )
             return
-        dlg = ClipboardBatchDialog(urls, self)
+        dlg = ClipboardBatchDialog(urls, self.settings, self)
         if dlg.exec() == ClipboardBatchDialog.Accepted:
             chosen = dlg.selected()
             if chosen:
-                self.queue.add_urls(chosen)
+                selected_dir = dlg.get_dir()
+                self.queue.add_urls(chosen, selected_dir)
 
     def _toggle_queue(self) -> None:
         if self.queue.is_running:
@@ -789,10 +822,7 @@ class MainWindow(QMainWindow):
             else _human_bytes(completed)
         )
         item.setText(COL_SIZE, size_text)
-        item.setText(
-            COL_SPEED,
-            _human_speed(task.download_speed) if task.status == "active" else "—",
-        )
+        item.setText(COL_SPEED, _speed_eta(task, completed))
 
     def _slow_tick(self) -> None:
         self._refresh_stats()

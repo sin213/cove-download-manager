@@ -175,10 +175,11 @@ class QueueManager(QObject):
 
     # ---- public API ---------------------------------------------------
 
-    def add_url(self, url: str) -> Optional[int]:
+    def add_url(self, url: str, out_dir: str | None = None) -> Optional[int]:
         url = url.strip()
         if not URL_RE.match(url):
             return None
+        dest_dir = out_dir or self.settings.download_dir
         with db.connect() as conn:
             cur = conn.execute(
                 """
@@ -188,7 +189,7 @@ class QueueManager(QObject):
                 """,
                 (
                     url,
-                    self.settings.download_dir,
+                    dest_dir,
                     self.settings.connections_per_server,
                     0,
                     "queued",
@@ -199,7 +200,7 @@ class QueueManager(QObject):
         t = DownloadTask(
             id=tid,
             url=url,
-            out_dir=self.settings.download_dir,
+            out_dir=dest_dir,
             connections=self.settings.connections_per_server,
         )
         self.tasks[tid] = t
@@ -207,8 +208,8 @@ class QueueManager(QObject):
         self._maybe_start_next()
         return tid
 
-    def add_urls(self, urls: list[str]) -> list[int]:
-        return [tid for u in urls if (tid := self.add_url(u)) is not None]
+    def add_urls(self, urls: list[str], out_dir: str | None = None) -> list[int]:
+        return [tid for u in urls if (tid := self.add_url(u, out_dir)) is not None]
 
     def pause(self, tid: int) -> None:
         t = self.tasks.get(tid)
