@@ -1,0 +1,176 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0b0b10;
+  color: #ececf1;
+  font-family: "Segoe UI", "Cantarell", sans-serif;
+  font-size: 14px;
+  padding: 40px;
+}
+
+.container {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 600;
+  color: #ececf1;
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  color: #9a9aae;
+  font-size: 13px;
+  margin-bottom: 32px;
+}
+
+h2 {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b6b80;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}
+
+section {
+  background-color: #13131b;
+  border: 1px solid #1a1a22;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field:last-child {
+  margin-bottom: 0;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  color: #ececf1;
+  margin-bottom: 6px;
+}
+
+input[type="checkbox"] {
+  margin-right: 8px;
+  accent-color: #50e6cf;
+}
+
+input[type="number"],
+select,
+textarea {
+  background-color: #181822;
+  color: #ececf1;
+  border: 1px solid #1a1a22;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: monospace;
+  width: 100%;
+}
+
+input[type="number"] {
+  width: 80px;
+}
+
+select {
+  width: auto;
+}
+
+textarea {
+  resize: vertical;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #50e6cf;
+  background-color: #1f1f2b;
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.hint {
+  font-size: 11px;
+  color: #6b6b80;
+  margin-top: 4px;
+}
+
+.btn-accent {
+  background-color: #50e6cf;
+  color: #07120f;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-accent:hover {
+  background-color: #6cebd6;
+}
+
+.btn-secondary {
+  background-color: #181822;
+  color: #9a9aae;
+  border: 1px solid #1a1a22;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+.btn-secondary:hover {
+  background-color: #1f1f2b;
+  color: #ececf1;
+  border-color: #23232d;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+#save-status {
+  font-size: 12px;
+  color: #50e6cf;
+}
+
+#test-result {
+  font-size: 12px;
+  margin-left: 12px;
+}
+
+#test-result.ok {
+  color: #50e6cf;
+}
+
+#test-result.error {
+  color: #ff5f6d;
+}
+
+#connection-test {
+  display: flex;
+  align-items: center;
+}

@@ -1,0 +1,77 @@
+const DEFAULT_EXTENSIONS = [
+  ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
+  ".exe", ".msi", ".dmg", ".iso", ".img",
+  ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
+  ".mp3", ".flac", ".aac", ".ogg", ".wav",
+  ".pdf", ".torrent",
+  ".deb", ".rpm", ".appimage",
+];
+
+const enabledCheckbox = document.getElementById("enabled");
+const minSizeInput = document.getElementById("min-size");
+const minSizeUnit = document.getElementById("min-size-unit");
+const extensionsTextarea = document.getElementById("extensions");
+const excludedDomainsTextarea = document.getElementById("excluded-domains");
+const saveBtn = document.getElementById("save");
+const saveStatus = document.getElementById("save-status");
+const resetExtensionsBtn = document.getElementById("reset-extensions");
+const testConnectionBtn = document.getElementById("test-connection");
+const testResult = document.getElementById("test-result");
+
+async function loadSettings() {
+  const s = await browser.runtime.sendMessage({ type: "getSettings" });
+
+  enabledCheckbox.checked = s.enabled;
+  extensionsTextarea.value = (s.interceptExtensions || []).join(", ");
+  excludedDomainsTextarea.value = (s.excludedDomains || []).join("\n");
+
+  const bytes = s.minSizeBytes || 0;
+  if (bytes >= 1073741824 && bytes % 1073741824 === 0) {
+    minSizeInput.value = bytes / 1073741824;
+    minSizeUnit.value = "1073741824";
+  } else if (bytes >= 1048576 && bytes % 1048576 === 0) {
+    minSizeInput.value = bytes / 1048576;
+    minSizeUnit.value = "1048576";
+  } else {
+    minSizeInput.value = Math.round(bytes / 1024);
+    minSizeUnit.value = "1024";
+  }
+}
+
+saveBtn.addEventListener("click", async () => {
+  const newSettings = {
+    enabled: enabledCheckbox.checked,
+    minSizeBytes: parseInt(minSizeInput.value) * parseInt(minSizeUnit.value),
+    interceptExtensions: extensionsTextarea.value
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.startsWith(".")),
+    excludedDomains: excludedDomainsTextarea.value
+      .split("\n")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  };
+
+  await browser.runtime.sendMessage({ type: "saveSettings", settings: newSettings });
+  saveStatus.textContent = "Saved";
+  setTimeout(() => { saveStatus.textContent = ""; }, 2000);
+});
+
+resetExtensionsBtn.addEventListener("click", () => {
+  extensionsTextarea.value = DEFAULT_EXTENSIONS.join(", ");
+});
+
+testConnectionBtn.addEventListener("click", async () => {
+  testResult.textContent = "Testing...";
+  testResult.className = "";
+  const result = await browser.runtime.sendMessage({ type: "ping" });
+  if (result && result.status === "ok") {
+    testResult.textContent = "Connected - Cove v" + result.version;
+    testResult.className = "ok";
+  } else {
+    testResult.textContent = "Failed - " + (result?.message || "Cannot reach Cove");
+    testResult.className = "error";
+  }
+});
+
+loadSettings();

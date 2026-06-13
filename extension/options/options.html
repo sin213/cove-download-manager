@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Cove Download Manager</h1>
+    <p class="subtitle">Extension Settings</p>
+
+    <section>
+      <h2>Interception</h2>
+
+      <div class="field">
+        <label>
+          <input type="checkbox" id="enabled" checked>
+          Enable automatic download interception
+        </label>
+      </div>
+
+      <div class="field">
+        <label for="min-size">Minimum file size to intercept</label>
+        <div class="input-row">
+          <input type="number" id="min-size" min="0" value="1">
+          <select id="min-size-unit">
+            <option value="1048576" selected>MB</option>
+            <option value="1024">KB</option>
+            <option value="1073741824">GB</option>
+          </select>
+        </div>
+        <p class="hint">Files smaller than this will be handled by Firefox. Set to 0 to intercept all sizes.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>File Types</h2>
+      <div class="field">
+        <label for="extensions">File extensions to intercept (comma-separated)</label>
+        <textarea id="extensions" rows="3" spellcheck="false"></textarea>
+        <p class="hint">Example: .zip, .exe, .mp4, .iso</p>
+        <button id="reset-extensions" class="btn-secondary">Reset to defaults</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Excluded Domains</h2>
+      <div class="field">
+        <label for="excluded-domains">Domains where interception is disabled (one per line)</label>
+        <textarea id="excluded-domains" rows="3" spellcheck="false"
+          placeholder="drive.google.com&#10;dropbox.com"></textarea>
+        <p class="hint">Downloads from these domains will always be handled by Firefox.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Connection</h2>
+      <div class="field" id="connection-test">
+        <button id="test-connection" class="btn-accent">Test Connection to Cove</button>
+        <span id="test-result"></span>
+      </div>
+    </section>
+
+    <div class="actions">
+      <span id="save-status"></span>
+      <button id="save" class="btn-accent">Save</button>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
