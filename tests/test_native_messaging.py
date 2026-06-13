@@ -1,0 +1,114 @@
+"""Tests for the native messaging host protocol and download handling."""
+import io
+import json
+import struct
+from unittest.mock import MagicMock, patch
+
+from cove.native_messaging import (
+    encode_message,
+    decode_message,
+    validate_url,
+    handle_message,
+)
+
+
+def test_encode_message():
+    msg = {"status": "ok"}
+    encoded = encode_message(msg)
+    length = struct.unpack("@I", encoded[:4])[0]
+    body = json.loads(encoded[4:])
+    assert length == len(encoded) - 4
+    assert body == {"status": "ok"}
+
+
+def test_decode_message():
+    msg = {"action": "ping"}
+    body = json.dumps(msg).encode("utf-8")
+    data = struct.pack("@I", len(body)) + body
+    result = decode_message(io.BytesIO(data))
+    assert result == {"action": "ping"}
+
+
+def test_decode_message_eof():
+    result = decode_message(io.BytesIO(b""))
+    assert result is None
+
+
+def test_decode_message_too_large():
+    data = struct.pack("@I", 2 * 1024 * 1024) + b"\x00"
+    result = decode_message(io.BytesIO(data))
+    assert result is None
+
+
+def test_validate_url_http():
+    assert validate_url("https://example.com/file.zip") is True
+    assert validate_url("http://example.com/file.zip") is True
+
+
+def test_validate_url_ftp():
+    assert validate_url("ftp://example.com/file.zip") is True
+
+
+def test_validate_url_blocked_schemes():
+    assert validate_url("file:///etc/passwd") is False
+    assert validate_url("javascript:alert(1)") is False
+    assert validate_url("data:text/html,<h1>hi</h1>") is False
+
+
+def test_validate_url_garbage():
+    assert validate_url("") is False
+    assert validate_url("not a url") is False
+
+
+def test_handle_ping():
+    result = handle_message({"action": "ping"}, rpc=None, settings=None)
+    assert result["status"] == "ok"
+    assert "version" in result
+
+
+def test_handle_download():
+    mock_rpc = MagicMock()
+    mock_rpc.add_uri.return_value = "gid-123"
+    mock_settings = MagicMock()
+    mock_settings.download_dir = "/tmp/downloads"
+    mock_settings.connections_per_server = 16
+
+    msg = {
+        "action": "download",
+        "url": "https://example.com/file.zip",
+        "filename": "file.zip",
+        "referrer": "https://example.com/page",
+        "cookies": "session=abc",
+    }
+    result = handle_message(msg, rpc=mock_rpc, settings=mock_settings)
+    assert result["status"] == "ok"
+    assert result["gid"] == "gid-123"
+
+    call_args = mock_rpc.add_uri.call_args
+    assert call_args[0][0] == ["https://example.com/file.zip"]
+    headers = call_args[1]["headers"]
+    assert "Cookie: session=abc" in headers
+    assert "Referer: https://example.com/page" in headers
+
+
+def test_handle_download_invalid_url():
+    result = handle_message(
+        {"action": "download", "url": "file:///etc/passwd"},
+        rpc=MagicMock(),
+        settings=MagicMock(),
+    )
+    assert result["status"] == "error"
+
+
+def test_handle_download_missing_url():
+    result = handle_message(
+        {"action": "download"},
+        rpc=MagicMock(),
+        settings=MagicMock(),
+    )
+    assert result["status"] == "error"
+
+
+def test_handle_unknown_action():
+    result = handle_message({"action": "unknown"}, rpc=None, settings=None)
+    assert result["status"] == "error"
