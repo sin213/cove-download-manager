@@ -74,28 +74,28 @@ function markIntercepted(url) {
 }
 
 browser.downloads.onCreated.addListener((downloadItem) => {
+  console.log("Cove: onCreated fired", downloadItem.url, "enabled:", settings.enabled);
   if (!settings.enabled) return;
   if (downloadItem.url.startsWith("blob:") || downloadItem.url.startsWith("data:")) return;
   if (isDomainExcluded(downloadItem.url)) return;
   if (recentIntercepted.has(downloadItem.url)) return;
 
-  // Intercept all downloads immediately (IDM-style).
-  // Small web-page downloads get filtered out in onChanged.
   interceptDownload(downloadItem);
 });
 
 async function interceptDownload(downloadItem) {
   markIntercepted(downloadItem.url);
 
-  // Cancel the browser download and remove from Firefox's download list.
+  // Cancel the browser download and scrub it from Firefox's download list.
   const dlId = downloadItem.id;
   try {
     await browser.downloads.cancel(dlId);
   } catch {}
-  // Delay erase so Firefox finishes its state transition.
-  setTimeout(() => {
-    browser.downloads.erase({ id: dlId }).catch(() => {});
-  }, 500);
+  // Erase once Firefox registers the cancellation, then retry to be sure.
+  const eraseIt = () => browser.downloads.erase({ id: dlId }).catch(() => {});
+  eraseIt();
+  setTimeout(eraseIt, 300);
+  setTimeout(eraseIt, 1000);
 
   // Gather cookies for the download URL.
   let cookieStr = "";
