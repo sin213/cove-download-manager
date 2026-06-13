@@ -48,6 +48,8 @@
     "128": "icons/icon-128.png"
   },
 
+  "content_security_policy": "script-src 'self'; object-src 'self'",
+
   "commands": {
     "toggle-intercept": {
       "suggested_key": { "default": "Alt+Shift+D" },

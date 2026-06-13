@@ -105,8 +105,13 @@ def handle_message(
 
 
 def main() -> None:
-    settings = Settings.load()
-    rpc = Aria2RPC(settings)
+    try:
+        settings = Settings.load()
+        rpc = Aria2RPC(settings)
+    except Exception as e:
+        settings = None
+        rpc = None
+
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
 

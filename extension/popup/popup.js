@@ -44,6 +44,12 @@ document.getElementById("open-options").addEventListener("click", () => {
   browser.runtime.openOptionsPage();
 });
 
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 function renderDownloads(downloads) {
   if (!downloads || downloads.length === 0) {
     downloadsList.innerHTML = '<div class="empty-state">No active downloads</div>';
@@ -53,7 +59,8 @@ function renderDownloads(downloads) {
   downloadsList.innerHTML = downloads
     .map((dl) => {
       const files = dl.files || [];
-      const filename = files[0]?.path?.split("/").pop() || "Unknown";
+      const rawName = files[0]?.path?.split("/").pop() || "Unknown";
+      const filename = escapeHtml(rawName);
       const total = parseInt(dl.totalLength || 0);
       const completed = parseInt(dl.completedLength || 0);
       const speed = parseInt(dl.downloadSpeed || 0);

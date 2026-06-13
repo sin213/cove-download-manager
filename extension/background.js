@@ -65,10 +65,18 @@ function isDomainExcluded(url) {
 // Track downloads we've seen but are waiting for metadata on.
 const pendingDownloads = new Map();
 
+// Dedup guard: URLs intercepted recently (prevents re-intercept after cancel).
+const recentIntercepted = new Set();
+function markIntercepted(url) {
+  recentIntercepted.add(url);
+  setTimeout(() => recentIntercepted.delete(url), 5000);
+}
+
 browser.downloads.onCreated.addListener((downloadItem) => {
   if (!settings.enabled) return;
   if (downloadItem.url.startsWith("blob:") || downloadItem.url.startsWith("data:")) return;
   if (isDomainExcluded(downloadItem.url)) return;
+  if (recentIntercepted.has(downloadItem.url)) return;
 
   const ext = getExtension(downloadItem.url);
   if (ext && settings.interceptExtensions.includes(ext)) {
@@ -120,6 +128,7 @@ browser.downloads.onChanged.addListener((delta) => {
 
 async function interceptDownload(downloadItem) {
   pendingDownloads.delete(downloadItem.id);
+  markIntercepted(downloadItem.url);
 
   // Cancel the browser download.
   try {
@@ -152,6 +161,7 @@ async function interceptDownload(downloadItem) {
     referrer: downloadItem.referrer || "",
     cookies: cookieStr,
     fileSize: downloadItem.totalBytes || 0,
+    userAgent: navigator.userAgent,
   });
 
   if (result.status === "ok") {
