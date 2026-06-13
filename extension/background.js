@@ -4,6 +4,7 @@ const HOST_NAME = "cove_download_manager";
 
 function sendNativeMessage(msg) {
   return browser.runtime.sendNativeMessage(HOST_NAME, msg).catch((err) => {
+    console.error("Cove native messaging error:", err);
     return { status: "error", message: err.message || String(err) };
   });
 }
@@ -78,65 +79,23 @@ browser.downloads.onCreated.addListener((downloadItem) => {
   if (isDomainExcluded(downloadItem.url)) return;
   if (recentIntercepted.has(downloadItem.url)) return;
 
-  const ext = getExtension(downloadItem.url);
-  if (ext && settings.interceptExtensions.includes(ext)) {
-    interceptDownload(downloadItem);
-    return;
-  }
-
-  // Can't decide yet - wait for onChanged to get fileSize/filename.
-  pendingDownloads.set(downloadItem.id, downloadItem);
-});
-
-browser.downloads.onChanged.addListener((delta) => {
-  if (!pendingDownloads.has(delta.id)) return;
-  const item = pendingDownloads.get(delta.id);
-
-  if (delta.totalBytes) {
-    item.totalBytes = delta.totalBytes.current;
-  }
-  if (delta.filename) {
-    item.filename = delta.filename.current;
-  }
-
-  // Check filename extension now that we have it.
-  if (delta.filename) {
-    const name = delta.filename.current || "";
-    const dot = name.lastIndexOf(".");
-    if (dot !== -1) {
-      const ext = name.substring(dot).toLowerCase();
-      if (settings.interceptExtensions.includes(ext)) {
-        pendingDownloads.delete(delta.id);
-        interceptDownload(item);
-        return;
-      }
-    }
-  }
-
-  // Check size threshold.
-  if (item.totalBytes && item.totalBytes >= settings.minSizeBytes) {
-    pendingDownloads.delete(delta.id);
-    interceptDownload(item);
-    return;
-  }
-
-  // If download completed or errored without matching, stop tracking.
-  if (delta.state && (delta.state.current === "complete" || delta.state.current === "interrupted")) {
-    pendingDownloads.delete(delta.id);
-  }
+  // Intercept all downloads immediately (IDM-style).
+  // Small web-page downloads get filtered out in onChanged.
+  interceptDownload(downloadItem);
 });
 
 async function interceptDownload(downloadItem) {
-  pendingDownloads.delete(downloadItem.id);
   markIntercepted(downloadItem.url);
 
-  // Cancel the browser download.
+  // Cancel the browser download and remove from Firefox's download list.
+  const dlId = downloadItem.id;
   try {
-    await browser.downloads.cancel(downloadItem.id);
-    await browser.downloads.erase({ id: downloadItem.id });
-  } catch {
-    // Already completed or cancelled.
-  }
+    await browser.downloads.cancel(dlId);
+  } catch {}
+  // Delay erase so Firefox finishes its state transition.
+  setTimeout(() => {
+    browser.downloads.erase({ id: dlId }).catch(() => {});
+  }, 500);
 
   // Gather cookies for the download URL.
   let cookieStr = "";
@@ -154,6 +113,8 @@ async function interceptDownload(downloadItem) {
     filename = parts[parts.length - 1] || null;
   }
 
+  console.log("Cove: intercepting download", downloadItem.url);
+
   const result = await sendNativeMessage({
     action: "download",
     url: downloadItem.url,
@@ -164,6 +125,8 @@ async function interceptDownload(downloadItem) {
     userAgent: navigator.userAgent,
   });
 
+  console.log("Cove: native host response", JSON.stringify(result));
+
   if (result.status === "ok") {
     showNotification("Download sent to Cove", filename || downloadItem.url);
   } else {
@@ -173,13 +136,23 @@ async function interceptDownload(downloadItem) {
 
 // ---- Context menu ----
 
-browser.contextMenus.create({
-  id: "download-with-cove",
-  title: "Download with Cove",
-  contexts: ["link", "image", "video", "audio"],
-});
+browser.contextMenus.create(
+  {
+    id: "download-with-cove",
+    title: "Download with Cove",
+    contexts: ["link", "image", "video", "audio"],
+  },
+  () => {
+    if (browser.runtime.lastError) {
+      console.error("Cove: context menu create error:", browser.runtime.lastError);
+    } else {
+      console.log("Cove: context menu registered");
+    }
+  }
+);
 
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
+  console.log("Cove: context menu clicked", info.menuItemId, info.linkUrl || info.srcUrl);
   if (info.menuItemId !== "download-with-cove") return;
 
   const url = info.linkUrl || info.srcUrl;
@@ -189,9 +162,7 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
     const cookies = await browser.cookies.getAll({ url });
     cookieStr = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-  } catch {
-    // No cookies.
-  }
+  } catch {}
 
   let filename = null;
   try {
@@ -199,9 +170,7 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
     const parts = pathname.split("/");
     const last = parts[parts.length - 1];
     if (last && last.includes(".")) filename = decodeURIComponent(last);
-  } catch {
-    // Invalid URL.
-  }
+  } catch {}
 
   const result = await sendNativeMessage({
     action: "download",
@@ -209,6 +178,7 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
     filename: filename,
     referrer: info.pageUrl || "",
     cookies: cookieStr,
+    userAgent: navigator.userAgent,
   });
 
   if (result.status === "ok") {
@@ -281,3 +251,10 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // ---- Init ----
 
 loadSettings().then(updateBadge);
+
+// Startup connectivity test
+sendNativeMessage({ action: "ping" }).then((r) => {
+  console.log("Cove startup ping:", JSON.stringify(r));
+}).catch((e) => {
+  console.error("Cove startup ping FAILED:", e);
+});

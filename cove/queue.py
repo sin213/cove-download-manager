@@ -127,6 +127,10 @@ class QueueManager(QObject):
         self._poll.setInterval(500)
         self._poll.timeout.connect(self._poll_active)
         self._poll.start()
+        self._ext_poll = QTimer(self)
+        self._ext_poll.setInterval(2000)
+        self._ext_poll.timeout.connect(self._check_external)
+        self._ext_poll.start()
         db.init()
         self._load_persisted()
 
@@ -138,6 +142,7 @@ class QueueManager(QObject):
                 "SELECT * FROM downloads WHERE status IN ('queued','active','paused')"
             ).fetchall()
         for row in rows:
+            has_gid = bool(row["gid"])
             t = DownloadTask(
                 id=row["id"],
                 url=row["url"],
@@ -145,12 +150,39 @@ class QueueManager(QObject):
                 connections=row["connections"],
                 speed_limit_kbps=row["speed_limit_kbps"],
                 filename=row["filename"],
-                status="queued",  # restart in queued state
+                gid=row["gid"],
+                status="active" if has_gid else "queued",
                 total_bytes=row["total_bytes"],
                 completed_bytes=row["completed_bytes"],
                 created_at=row["created_at"],
             )
             self.tasks[t.id] = t
+
+    def _check_external(self) -> None:
+        """Pick up downloads inserted by the native messaging host."""
+        try:
+            with db.connect() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM downloads WHERE status='active' AND gid IS NOT NULL"
+                ).fetchall()
+        except Exception:
+            return
+        for row in rows:
+            if row["id"] in self.tasks:
+                continue
+            t = DownloadTask(
+                id=row["id"],
+                url=row["url"],
+                out_dir=row["out_dir"],
+                connections=row["connections"],
+                speed_limit_kbps=row["speed_limit_kbps"],
+                filename=row["filename"],
+                gid=row["gid"],
+                status="active",
+                created_at=row["created_at"],
+            )
+            self.tasks[t.id] = t
+            self.task_added.emit(t.id)
 
     def _persist(self, t: DownloadTask) -> None:
         with db.connect() as conn:
