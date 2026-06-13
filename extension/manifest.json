@@ -12,6 +12,11 @@
     }
   },
 
+  "data_collection_permissions": {
+    "storageSync": false,
+    "storageLocal": true
+  },
+
   "permissions": [
     "downloads",
     "cookies",
