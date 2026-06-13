@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <img src="../icons/icon-32.png" alt="" class="logo">
+    <span class="title">Cove</span>
+    <button id="toggle-btn" class="toggle-btn" title="Toggle interception">ON</button>
+  </div>
+
+  <div id="status-bar" class="status-bar">
+    <span id="connection-status">Checking...</span>
+  </div>
+
+  <div id="downloads-list" class="downloads-list">
+    <div class="empty-state">No active downloads</div>
+  </div>
+
+  <div class="footer">
+    <button id="open-options" class="footer-btn">Settings</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
