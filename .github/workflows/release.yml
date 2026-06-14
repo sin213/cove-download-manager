@@ -65,9 +65,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: appimage
-          path: |
-            release/Cove-Download-Manager-${{ steps.ver.outputs.version }}-x86_64.AppImage
-            release/Cove-Download-Manager-${{ steps.ver.outputs.version }}-x86_64.AppImage.sha256
+          path: release/Cove-Download-Manager-${{ steps.ver.outputs.version }}-x86_64.AppImage
           if-no-files-found: error
 
   # ── Linux .deb ─────────────────────────────────────────────────────────
@@ -110,9 +108,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: deb
-          path: |
-            release/cove-download-manager_${{ steps.ver.outputs.version }}_amd64.deb
-            release/cove-download-manager_${{ steps.ver.outputs.version }}_amd64.deb.sha256
+          path: release/cove-download-manager_${{ steps.ver.outputs.version }}_amd64.deb
           if-no-files-found: error
 
   # ── Windows Setup.exe + Portable.exe (native, no Wine) ────────────────
@@ -246,25 +242,13 @@ jobs:
             packaging/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
-      - name: Stage portable + write SHA-256 sidecars
+      - name: Stage portable
         shell: pwsh
         run: |
           $version = "${{ steps.ver.outputs.version }}"
           $portSrc = "build/win-onefile/dist/cove-download-manager-portable.exe"
           $portDst = "release/Cove-Download-Manager-$version-Portable.exe"
           Copy-Item -Force $portSrc $portDst
-          $setup   = "release/Cove-Download-Manager-$version-Setup.exe"
-          # Write sidecars with LF endings (not CRLF) so `sha256sum -c`
-          # on Linux can read the filename without the trailing CR.
-          $ascii = New-Object System.Text.ASCIIEncoding
-          foreach ($f in @($setup, $portDst)) {
-            if (Test-Path $f) {
-              $h = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
-              $name = Split-Path $f -Leaf
-              $line = "$h  $name`n"
-              [IO.File]::WriteAllBytes("$f.sha256", $ascii.GetBytes($line))
-            }
-          }
           Get-ChildItem release | Format-Table -AutoSize
 
       - uses: actions/upload-artifact@v4
@@ -272,9 +256,7 @@ jobs:
           name: windows
           path: |
             release/Cove-Download-Manager-${{ steps.ver.outputs.version }}-Setup.exe
-            release/Cove-Download-Manager-${{ steps.ver.outputs.version }}-Setup.exe.sha256
             release/Cove-Download-Manager-${{ steps.ver.outputs.version }}-Portable.exe
-            release/Cove-Download-Manager-${{ steps.ver.outputs.version }}-Portable.exe.sha256
           if-no-files-found: error
 
   # ── Publish GitHub release ─────────────────────────────────────────────
@@ -303,13 +285,11 @@ jobs:
           find artifacts -type f -exec cp -v {} release/ \;
           ls -la release/
 
-      - name: Verify SHA-256 sidecars
+      - name: Generate checksums bundle
         run: |
           cd release
-          for f in *.sha256; do
-            echo "Verifying $f"
-            sha256sum -c "$f"
-          done
+          sha256sum * > checksums-sha256.txt
+          cat checksums-sha256.txt
 
       - name: Create GitHub release
         env:
@@ -317,40 +297,21 @@ jobs:
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           NOTES_FILE="$(mktemp)"
-          cat > "$NOTES_FILE" <<EOF
-          ## What's new in v$VERSION
-
-          **Download list**
-          - ETA display in the speed column (e.g. "1.2 MB/s · ETA 3m 45s")
-          - Columns are now interactively resizable
-
-          **Clipboard batch dialog**
-          - Added a "Save to" directory picker so you can choose where batch downloads land
-
-          **Footer**
-          - Improved layout with left-aligned hotkeys and right-aligned folder chip / platform label
-          - Better spacing and sizing across all footer elements
-
-          **Polish**
-          - Renamed "Open download folder" to "Open downloads folder"
-
+          cat > "$NOTES_FILE" <<'NOTESEOF'
           ## Downloads
 
           | Platform | File |
           |----------|------|
-          | Linux (AppImage) | \`Cove-Download-Manager-$VERSION-x86_64.AppImage\` |
-          | Linux (Debian/Ubuntu) | \`cove-download-manager_${VERSION}_amd64.deb\` |
-          | Windows installer | \`Cove-Download-Manager-$VERSION-Setup.exe\` |
-          | Windows portable | \`Cove-Download-Manager-$VERSION-Portable.exe\` |
+          | Linux (AppImage) | `Cove-Download-Manager-VERSION-x86_64.AppImage` |
+          | Linux (Debian/Ubuntu) | `cove-download-manager_VERSION_amd64.deb` |
+          | Windows installer | `Cove-Download-Manager-VERSION-Setup.exe` |
+          | Windows portable | `Cove-Download-Manager-VERSION-Portable.exe` |
 
-          Each binary ships with a matching \`.sha256\` sidecar. Verify with:
-
-          \`\`\`
-          sha256sum -c <asset>.sha256
-          \`\`\`
-          EOF
+          Verify with `sha256sum -c checksums-sha256.txt`
+          NOTESEOF
+          sed -i "s/VERSION/${VERSION}/g" "$NOTES_FILE"
 
           gh release create "v$VERSION" \
             --title "v$VERSION" \
-            --notes-file "$NOTES_FILE" \
+            -F "$NOTES_FILE" \
             release/*
