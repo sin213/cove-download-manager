@@ -76,11 +76,10 @@ from .widgets import (
 
 # Tree column indices.
 COL_NAME = 0
-COL_CATEGORY = 1
-COL_STATUS = 2
-COL_PROGRESS = 3
-COL_SIZE = 4
-COL_SPEED = 5
+COL_STATUS = 1
+COL_PROGRESS = 2
+COL_SIZE = 3
+COL_SPEED = 4
 
 
 def _human_bytes(n: int) -> str:
@@ -410,10 +409,10 @@ class MainWindow(QMainWindow):
         stage.addWidget(label)
 
         self.tree = DownloadTree()
-        self.tree.setColumnCount(6)
-        self.tree.setHeaderLabels(["Name", "Category", "Status", "Progress", "Size", "Speed"])
+        self.tree.setColumnCount(5)
+        self.tree.setHeaderLabels(["Name", "Status", "Progress", "Size", "Speed"])
         self.tree.setRootIsDecorated(False)
-        self.tree.setAlternatingRowColors(True)
+        self.tree.setAlternatingRowColors(False)
         self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -423,8 +422,7 @@ class MainWindow(QMainWindow):
         header.setStretchLastSection(False)
         for col in range(self.tree.columnCount()):
             header.setSectionResizeMode(col, QHeaderView.Interactive)
-        header.resizeSection(COL_NAME, 300)
-        header.resizeSection(COL_CATEGORY, 90)
+        header.resizeSection(COL_NAME, 380)
         header.resizeSection(COL_STATUS, 100)
         header.resizeSection(COL_PROGRESS, 220)
         header.resizeSection(COL_SIZE, 160)
@@ -788,7 +786,7 @@ class MainWindow(QMainWindow):
         task = self.queue.tasks.get(tid)
         if not task:
             return
-        item = QTreeWidgetItem(["", "", "", "", "", ""])
+        item = QTreeWidgetItem(["", "", "", "", ""])
         item.setData(0, Qt.UserRole, tid)
         self.tree.addTopLevelItem(item)
         bar = QProgressBar()
@@ -844,7 +842,6 @@ class MainWindow(QMainWindow):
         name = task.filename or task.url
         item.setText(COL_NAME, name)
         item.setToolTip(COL_NAME, task.error or task.url)
-        item.setText(COL_CATEGORY, task.category)
         item.setText(COL_STATUS, _status_label(task.status))
         # Persistent state coloring on the Status column so an error (or
         # paused) row stays visually distinct after the StatusPill flash

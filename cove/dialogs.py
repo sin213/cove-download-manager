@@ -306,14 +306,6 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Updates", self.auto_update)
 
-        self.auto_sort = QCheckBox("Auto-sort downloads into category folders")
-        self.auto_sort.setChecked(settings.auto_sort_categories)
-        self.auto_sort.setToolTip(
-            "When enabled, downloads are saved into subfolders (Videos, Music, "
-            "Documents, Archives, Programs, Images, Other) based on file extension."
-        )
-        form.addRow("Categories", self.auto_sort)
-
         self.smart_segments = QCheckBox("Auto-tune connections based on server support")
         self.smart_segments.setChecked(settings.intelligent_segments)
         self.smart_segments.setToolTip(
@@ -381,7 +373,6 @@ class SettingsDialog(QDialog):
         self.settings.overall_speed_limit_kbps = self.speed_limit.value()
         self.settings.time_format_24h = self.use_24h.isChecked()
         self.settings.auto_update_check = self.auto_update.isChecked()
-        self.settings.auto_sort_categories = self.auto_sort.isChecked()
         self.settings.intelligent_segments = self.smart_segments.isChecked()
         self.settings.proxy_type = self.proxy_type.currentData()
         self.settings.proxy_host = self.proxy_host.text().strip()

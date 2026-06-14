@@ -336,7 +336,7 @@ class FramelessResizer(QObject):
     """Lets a frameless QMainWindow be resized from its edges via
     `startSystemResize()`. Cross-platform; no WM-specific glue."""
 
-    BORDER = 6
+    BORDER = 18
 
     def __init__(self, window: QMainWindow):
         super().__init__(window)
