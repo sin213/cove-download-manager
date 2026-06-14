@@ -145,7 +145,6 @@ class QueueManager(QObject):
                 "SELECT * FROM downloads WHERE status IN ('queued','active','paused')"
             ).fetchall()
         for row in rows:
-            has_gid = bool(row["gid"])
             t = DownloadTask(
                 id=row["id"],
                 url=row["url"],
@@ -153,8 +152,8 @@ class QueueManager(QObject):
                 connections=row["connections"],
                 speed_limit_kbps=row["speed_limit_kbps"],
                 filename=row["filename"],
-                gid=row["gid"],
-                status="active" if has_gid else "queued",
+                gid=None,
+                status="queued",
                 total_bytes=row["total_bytes"],
                 completed_bytes=row["completed_bytes"],
                 created_at=row["created_at"],
@@ -572,11 +571,12 @@ class QueueManager(QObject):
         t = self.tasks.get(tid)
         if not t:
             return
-        t.status = "paused"
-        t.error = msg
+        t.gid = None
+        t.status = "queued"
+        t.error = None
         self._persist(t)
         self.task_changed.emit(tid)
-        self.error.emit(msg)
+        self._maybe_start_next()
 
     def _mark_paused(self, tid: int) -> None:
         t = self.tasks.get(tid)
