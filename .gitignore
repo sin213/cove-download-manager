@@ -18,6 +18,7 @@ cove_icon.ico
 
 # Local cove runtime state (only relevant when running from the source tree)
 cove/cove_icon.png
+cove/Archive.zip
 
 # Editor / OS
 .vscode/
