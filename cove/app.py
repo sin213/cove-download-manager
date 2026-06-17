@@ -139,6 +139,12 @@ def run() -> int:
         window._updater = updater  # keep a reference
 
     def _cleanup() -> None:
+        # Stop UI repaint timers first so they don't fire on widgets being
+        # torn down during shutdown.
+        try:
+            window.stop_ui_timers()
+        except Exception:
+            pass
         try:
             rpc.shutdown()
         except Exception:

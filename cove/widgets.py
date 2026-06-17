@@ -301,11 +301,18 @@ class Titlebar(QFrame):
     def _toggle_maximize(self) -> None:
         if self._window.isMaximized():
             self._window.showNormal()
-            self.max_btn._kind = "max"
         else:
             self._window.showMaximized()
-            self.max_btn._kind = "restore"
-        self.max_btn.update()
+        self.sync_max_glyph()
+
+    def sync_max_glyph(self) -> None:
+        """Match the button glyph to the window's actual maximized state, so
+        it stays correct even when the state changes outside this button
+        (OS shortcut, window snapping, etc.)."""
+        kind = "restore" if self._window.isMaximized() else "max"
+        if self.max_btn._kind != kind:
+            self.max_btn._kind = kind
+            self.max_btn.update()
 
     # ── drag / double-click ───────────────────────────────────────────
     def _on_button(self, child: QWidget | None) -> bool:

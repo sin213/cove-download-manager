@@ -378,8 +378,11 @@ class SettingsDialog(QDialog):
         cat_lay.addRow(cat_note)
         layout.addWidget(cat_group)
 
-        layout.addWidget(_make_buttons(self, ok_text="Save"))
-        bb = layout.itemAt(layout.count() - 1).widget()
+        # Keep a direct reference to the button box rather than fishing it
+        # back out of the layout by index (which breaks if layout order
+        # changes). Route Save through _on_accept instead of the default.
+        bb = _make_buttons(self, ok_text="Save")
+        layout.addWidget(bb)
         bb.accepted.disconnect()
         bb.accepted.connect(self._on_accept)
 

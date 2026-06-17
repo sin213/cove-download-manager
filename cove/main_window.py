@@ -18,7 +18,7 @@ import sys
 from math import ceil
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QMimeData, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -889,6 +889,19 @@ class MainWindow(QMainWindow):
         for tid, task in list(self.queue.tasks.items()):
             if task.status == "active":
                 self._render(task)
+
+    def stop_ui_timers(self) -> None:
+        """Stop the repaint timers before teardown so they can't fire on
+        already-destroyed progress-bar widgets during shutdown."""
+        self._tick.stop()
+        self._smooth.stop()
+
+    def changeEvent(self, event) -> None:
+        # Keep the titlebar maximize glyph in sync when the window state
+        # changes by any path (OS shortcut, snapping), not just our button.
+        if event.type() == QEvent.WindowStateChange:
+            self.titlebar.sync_max_glyph()
+        super().changeEvent(event)
 
     def _refresh_stats(self) -> None:
         active = 0
