@@ -20,6 +20,11 @@ cove_icon.ico
 cove/cove_icon.png
 cove/Archive.zip
 
+# Chrome extension signing key (private — NEVER commit). The public key is
+# pinned in extension/manifest.chrome.json; this .pem must stay local.
+extension/chrome-key.pem
+*.pem
+
 # Editor / OS
 .vscode/
 .idea/
