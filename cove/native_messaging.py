@@ -43,12 +43,17 @@ def decode_message(stream: io.BufferedIOBase) -> dict | None:
     if raw_length is None:
         return None
     length = struct.unpack("@I", raw_length)[0]
-    if length > MAX_MESSAGE_SIZE:
+    if length == 0 or length > MAX_MESSAGE_SIZE:
         return None
     data = _read_exact(stream, length)
     if data is None:
         return None
-    return json.loads(data)
+    try:
+        return json.loads(data)
+    except (ValueError, UnicodeDecodeError):
+        # Malformed frame: stop rather than crashing the host loop. The
+        # browser will respawn the host on the next message.
+        return None
 
 
 def encode_message(msg: dict) -> bytes:

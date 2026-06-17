@@ -65,17 +65,6 @@ async function saveSettings(newSettings) {
 
 // ---- Download interception ----
 
-function getExtension(url) {
-  try {
-    const pathname = new URL(url).pathname;
-    const dot = pathname.lastIndexOf(".");
-    if (dot === -1) return "";
-    return pathname.substring(dot).toLowerCase().split(/[?#]/)[0];
-  } catch {
-    return "";
-  }
-}
-
 function isDomainExcluded(url) {
   try {
     const hostname = new URL(url).hostname;
@@ -93,7 +82,13 @@ function isDomainExcluded(url) {
 const DEDUP_WINDOW_MS = 5000;
 const recentIntercepted = new Map(); // url -> timestamp
 function markIntercepted(url) {
-  recentIntercepted.set(url, Date.now());
+  const now = Date.now();
+  // Sweep expired entries so the Map can't grow unbounded over a long-lived
+  // (Firefox MV2) background page.
+  for (const [u, ts] of recentIntercepted) {
+    if (now - ts > DEDUP_WINDOW_MS) recentIntercepted.delete(u);
+  }
+  recentIntercepted.set(url, now);
 }
 function wasRecentlyIntercepted(url) {
   const ts = recentIntercepted.get(url);

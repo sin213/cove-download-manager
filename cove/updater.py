@@ -46,7 +46,9 @@ class UpdateInfo:
     checksum_name: str | None = None
 
 
-_VERSION_RE = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+](.+))?$", re.I)
+# Accept extra numeric components (e.g. 1.5.0.1) and ignore them for
+# ordering, rather than failing to match and treating the version as 0.0.0.
+_VERSION_RE = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.\d+)*(?:[-+](.+))?$", re.I)
 
 
 def _version_key(v: str) -> tuple[int, int, int, int, str]:

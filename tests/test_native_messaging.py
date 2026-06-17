@@ -44,6 +44,17 @@ def test_decode_message_eof_mid_body_returns_none():
     assert decode_message(io.BytesIO(framed)) is None
 
 
+def test_decode_message_malformed_json_returns_none():
+    bad = b"{not json"
+    framed = struct.pack("@I", len(bad)) + bad
+    assert decode_message(io.BytesIO(framed)) is None
+
+
+def test_decode_message_zero_length_returns_none():
+    framed = struct.pack("@I", 0)
+    assert decode_message(io.BytesIO(framed)) is None
+
+
 def test_sanitize_header_strips_crlf():
     assert nm._sanitize_header("a=b\r\nInjected: x") == "a=bInjected: x"
     assert nm._sanitize_header("clean=1") == "clean=1"
