@@ -3,7 +3,7 @@
 Order:
   1. QApplication + cove theme + window icon
   2. Settings, Scheduler, MainWindow (window is shown immediately so any
-     subsequent error dialogs have a real top-level parent — Wayland +
+     subsequent error dialogs have a real top-level parent - Wayland +
      QMessageBox(None, ...) crashes on some systems)
   3. Aria2 daemon start (deferred via QTimer). On failure, show an error
      parented to the main window and disable user actions.
@@ -23,6 +23,7 @@ from .main_window import MainWindow
 from .queue import QueueManager
 from .scheduler import Scheduler
 from .updater import UpdateController
+from .native_host_install import install_native_hosts
 from .widgets import find_icon
 
 UPDATE_REPO = "Sin213/cove-download-manager"
@@ -66,6 +67,12 @@ def run() -> int:
         app.setWindowIcon(QIcon(str(icon_path)))
 
     settings = Settings.load()
+
+    try:
+        install_native_hosts()
+    except Exception:
+        pass
+
     theme.set_theme(settings.theme)
     _apply_palette(app)
     app.setStyleSheet(theme.QSS)
@@ -92,7 +99,7 @@ def run() -> int:
         try:
             daemon.start()
         except Aria2Error as e:
-            QMessageBox.critical(window, f"{APP_NAME} — aria2 missing", str(e))
+            QMessageBox.critical(window, f"{APP_NAME} - aria2 missing", str(e))
             window.setEnabled(False)
             return
         # Apply the effective speed limit (kbps if the limiter is on, else 0).
@@ -106,7 +113,7 @@ def run() -> int:
 
     QTimer.singleShot(0, _boot_daemon)
 
-    # Update check — opt-in by default, always prompts before installing.
+    # Update check - opt-in by default, always prompts before installing.
     if settings.auto_update_check:
         updater = UpdateController(
             parent=window,
