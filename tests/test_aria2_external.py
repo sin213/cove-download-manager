@@ -1,4 +1,5 @@
 """Tests for the concurrency cap and external-download discovery."""
+import threading
 from unittest.mock import MagicMock, patch
 
 from cove.aria2 import Aria2Daemon, Aria2RPC, MAX_CONCURRENT_DOWNLOADS
@@ -43,3 +44,20 @@ def test_tell_stopped_passes_offset_num_keys():
     assert method == "aria2.tellStopped"
     assert params[0] == 0 and params[1] == 1000
     assert "gid" in params[2] and "status" in params[2]
+
+
+def test_rpc_session_is_thread_local():
+    """requests.Session isn't thread-safe; each thread must get its own."""
+    rpc = _rpc()
+    sessions = {}
+
+    def grab(name):
+        sessions[name] = rpc._session()
+
+    t1 = threading.Thread(target=lambda: grab("a"))
+    t2 = threading.Thread(target=lambda: grab("b"))
+    t1.start(); t1.join()
+    t2.start(); t2.join()
+    assert sessions["a"] is not sessions["b"]
+    # Same thread reuses one session.
+    assert rpc._session() is rpc._session()

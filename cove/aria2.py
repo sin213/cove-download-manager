@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -192,14 +193,30 @@ class Aria2RPC:
         self.url = f"http://127.0.0.1:{settings.rpc_port}/jsonrpc"
         self.secret = settings.rpc_secret
         self.timeout = timeout
-        self._session = requests.Session()
+        # requests.Session is not thread-safe. Calls fan out across a
+        # QThreadPool, so give each thread its own session.
+        self._local = threading.local()
+
+    def _session(self) -> requests.Session:
+        s = getattr(self._local, "session", None)
+        if s is None:
+            s = requests.Session()
+            self._local.session = s
+        return s
 
     def close(self) -> None:
-        """Release the underlying HTTP connection pool."""
-        self._session.close()
+        """Release the calling thread's HTTP connection pool, if any."""
+        s = getattr(self._local, "session", None)
+        if s is not None:
+            s.close()
+            self._local.session = None
 
     def __del__(self) -> None:
-        self.close()
+        # Best-effort; may run during interpreter shutdown.
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _call(self, method: str, params: Iterable[Any] = ()) -> Any:
         payload = {
@@ -209,7 +226,7 @@ class Aria2RPC:
             "params": [f"token:{self.secret}", *params],
         }
         try:
-            r = self._session.post(self.url, json=payload, timeout=self.timeout)
+            r = self._session().post(self.url, json=payload, timeout=self.timeout)
         except requests.RequestException as e:
             raise Aria2Error(f"RPC transport error: {e}") from e
         try:
