@@ -35,11 +35,12 @@ HOST_NAME = "cove_download_manager"
 # Chromium browsers identify it by extension id via allowed_origins.
 EXTENSION_ID = "cove-dm@cove-download-manager.net"
 
-# Chrome extension ids allowed to talk to the host. The first is the pinned
-# dev id derived from extension/chrome-key.pem. Append the Chrome Web Store
-# id here once the store item is created (see the design spec).
+# Chrome extension ids allowed to talk to the host.
+#   1. pinned dev id (from extension/chrome-key.pem) for unpacked testing
+#   2. Chrome Web Store id (permanent, assigned at item creation)
 _CHROME_EXTENSION_IDS = [
     "jnemjlhecpicblbjjhbhjbbbmjhplfal",
+    "liakghhamogjcmmgnmcpephlfecmilnf",
 ]
 
 # Firefox on Windows discovers native messaging hosts ONLY through this
