@@ -23,15 +23,30 @@ from .config import Settings
 MAX_MESSAGE_SIZE = 1024 * 1024  # 1 MB
 
 
+def _read_exact(stream: io.BufferedIOBase, n: int) -> bytes | None:
+    """Read exactly n bytes, looping over short reads. None on EOF.
+
+    A single ``stream.read(n)`` on a pipe may return fewer than n bytes, so
+    a one-shot read can spuriously truncate a large but valid message.
+    """
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = stream.read(n - len(buf))
+        if not chunk:
+            return None
+        buf.extend(chunk)
+    return bytes(buf)
+
+
 def decode_message(stream: io.BufferedIOBase) -> dict | None:
-    raw_length = stream.read(4)
-    if not raw_length or len(raw_length) < 4:
+    raw_length = _read_exact(stream, 4)
+    if raw_length is None:
         return None
     length = struct.unpack("@I", raw_length)[0]
     if length > MAX_MESSAGE_SIZE:
         return None
-    data = stream.read(length)
-    if len(data) < length:
+    data = _read_exact(stream, length)
+    if data is None:
         return None
     return json.loads(data)
 
@@ -39,6 +54,14 @@ def decode_message(stream: io.BufferedIOBase) -> dict | None:
 def encode_message(msg: dict) -> bytes:
     body = json.dumps(msg).encode("utf-8")
     return struct.pack("@I", len(body)) + body
+
+
+def _sanitize_header(value: Any) -> str:
+    """Strip CR/LF so an extension-supplied value can't inject extra
+    headers into the request aria2 makes (header/CRLF injection)."""
+    if not isinstance(value, str):
+        return ""
+    return value.replace("\r", "").replace("\n", "")
 
 
 def validate_url(url: str) -> bool:
@@ -68,13 +91,13 @@ def handle_message(
             return {"status": "error", "message": "Cove is not configured"}
 
         headers: list[str] = []
-        cookies = msg.get("cookies", "")
+        cookies = _sanitize_header(msg.get("cookies", ""))
         if cookies:
             headers.append(f"Cookie: {cookies}")
-        referrer = msg.get("referrer", "")
+        referrer = _sanitize_header(msg.get("referrer", ""))
         if referrer:
             headers.append(f"Referer: {referrer}")
-        user_agent = msg.get("userAgent", "")
+        user_agent = _sanitize_header(msg.get("userAgent", ""))
         if user_agent:
             headers.append(f"User-Agent: {user_agent}")
 
@@ -121,12 +144,18 @@ def _binary_stdio() -> tuple[io.BufferedReader, io.BufferedWriter]:
 
     if sys.platform == "win32":
         import msvcrt
-        from ctypes import windll
+        from ctypes import windll, wintypes
 
         STD_INPUT_HANDLE = -10
         STD_OUTPUT_HANDLE = -11
-        h_in = windll.kernel32.GetStdHandle(STD_INPUT_HANDLE)
-        h_out = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        # A HANDLE is pointer-sized; without an explicit restype ctypes
+        # defaults to c_int (32-bit) and truncates the handle on 64-bit
+        # builds, which can yield an invalid fd and break the pipe.
+        get_std_handle = windll.kernel32.GetStdHandle
+        get_std_handle.argtypes = [wintypes.DWORD]
+        get_std_handle.restype = wintypes.HANDLE
+        h_in = get_std_handle(STD_INPUT_HANDLE)
+        h_out = get_std_handle(STD_OUTPUT_HANDLE)
         fd_in = msvcrt.open_osfhandle(h_in, os.O_RDONLY | os.O_BINARY)
         fd_out = msvcrt.open_osfhandle(h_out, os.O_WRONLY | os.O_BINARY)
         return os.fdopen(fd_in, "rb"), os.fdopen(fd_out, "wb")

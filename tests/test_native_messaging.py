@@ -13,6 +13,60 @@ from cove.native_messaging import (
 )
 
 
+class _ChunkedStream:
+    """Stream that returns at most `chunk` bytes per read, to mimic a pipe
+    that delivers a large message in several short reads."""
+
+    def __init__(self, data: bytes, chunk: int = 3):
+        self._data = data
+        self._pos = 0
+        self._chunk = chunk
+
+    def read(self, n: int = -1) -> bytes:
+        end = min(self._pos + min(n, self._chunk), len(self._data))
+        out = self._data[self._pos:end]
+        self._pos = end
+        return out
+
+
+def test_decode_message_handles_short_reads():
+    """A large body delivered in small chunks must not be truncated."""
+    body = json.dumps({"action": "download", "url": "x" * 5000}).encode("utf-8")
+    framed = struct.pack("@I", len(body)) + body
+    result = decode_message(_ChunkedStream(framed, chunk=7))
+    assert result["action"] == "download"
+    assert len(result["url"]) == 5000
+
+
+def test_decode_message_eof_mid_body_returns_none():
+    body = json.dumps({"action": "ping"}).encode("utf-8")
+    framed = struct.pack("@I", len(body)) + body[:-2]  # truncated body
+    assert decode_message(io.BytesIO(framed)) is None
+
+
+def test_sanitize_header_strips_crlf():
+    assert nm._sanitize_header("a=b\r\nInjected: x") == "a=bInjected: x"
+    assert nm._sanitize_header("clean=1") == "clean=1"
+    assert nm._sanitize_header(None) == ""
+
+
+def test_download_does_not_inject_headers_via_crlf():
+    rpc = MagicMock()
+    rpc.add_uri.return_value = "gid-1"
+    settings = MagicMock()
+    settings.download_dir = "/tmp"
+    settings.connections_per_server = 8
+    msg = {
+        "action": "download",
+        "url": "https://example.com/f.zip",
+        "cookies": "s=1\r\nX-Evil: 1",
+        "referrer": "https://example.com/\r\nHost: evil",
+    }
+    handle_message(msg, rpc=rpc, settings=settings)
+    headers = rpc.add_uri.call_args[1]["headers"]
+    assert all("\r" not in h and "\n" not in h for h in headers)
+
+
 def test_binary_stdio_uses_existing_buffers():
     """When std streams exist (console/dev), reuse their binary buffers."""
     fake_in = io.BytesIO(b"")
