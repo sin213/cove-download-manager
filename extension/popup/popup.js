@@ -95,8 +95,59 @@ async function refreshDownloads() {
   }
 }
 
+async function refreshStreams() {
+  try {
+    const streams = await browser.runtime.sendMessage({ type: "getDetectedStreams" });
+    const section = document.getElementById("streams-section");
+    const list = document.getElementById("streams-list");
+    if (!section || !list) return;
+
+    if (!streams || streams.length === 0) {
+      section.style.display = "none";
+      return;
+    }
+
+    section.style.display = "block";
+    list.innerHTML = "";
+
+    for (const stream of streams) {
+      const item = document.createElement("div");
+      item.className = "stream-item";
+
+      const urlSpan = document.createElement("span");
+      urlSpan.className = "stream-url";
+      const shortUrl = stream.url.split("?")[0].split("/").slice(-2).join("/");
+      urlSpan.textContent = shortUrl;
+      urlSpan.title = stream.url;
+
+      const btn = document.createElement("button");
+      btn.className = "stream-download-btn";
+      btn.textContent = "Download";
+      btn.addEventListener("click", () => {
+        const filename = shortUrl.split("/").pop().replace(".m3u8", ".mp4") || "stream.mp4";
+        browser.runtime.sendMessage({
+          type: "downloadStream",
+          url: stream.url,
+          filename: filename,
+        });
+        btn.textContent = "Sent!";
+        btn.disabled = true;
+        setTimeout(() => { btn.textContent = "Download"; btn.disabled = false; }, 2000);
+      });
+
+      item.appendChild(urlSpan);
+      item.appendChild(btn);
+      list.appendChild(item);
+    }
+  } catch {}
+}
+
 checkConnection();
 loadSettings();
 refreshDownloads();
+refreshStreams();
 
-setInterval(refreshDownloads, 2000);
+setInterval(() => {
+  refreshDownloads();
+  refreshStreams();
+}, 2000);
